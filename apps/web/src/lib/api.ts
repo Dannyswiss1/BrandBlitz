@@ -20,6 +20,7 @@ export interface Challenge {
   id: string;
   brand_id: string;
   challenge_id: string;
+  pool_amount_stroops: string;
   pool_amount_usdc: string;
   status: "pending_deposit" | "active" | "ended" | "settled" | "payout_failed";
   starts_at: string;

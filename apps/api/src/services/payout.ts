@@ -3,7 +3,8 @@ import type { NetworkName } from "@brandblitz/stellar";
 import { getLeaderboard } from "../db/queries/sessions";
 import { getChallengeById, updateChallengeStatus } from "../db/queries/challenges";
 import { createPayout, updatePayoutStatus } from "../db/queries/payouts";
-import { calculatePayoutShare, rankWinners } from "./scoring";
+import { rankWinners } from "./scoring";
+import { calculatePayoutShareStroops, stroopsToUsdc } from "../lib/usdc";
 import { payoutJobOptions, payoutQueue } from "../queues/payout.queue";
 import { logger } from "../lib/logger";
 import { metrics } from "../lib/metrics";
@@ -83,28 +84,29 @@ export async function processPayout(challengeId: string): Promise<void> {
 
   const totalPoints = eligibleWinners.reduce((acc, s) => acc + s.totalScore, 0);
   const recipients: PayoutRecipient[] = [];
-  const payoutRecords: { id: string; address: string; amount: string }[] = [];
+  const payoutRecords: { id: string; address: string }[] = [];
 
   for (const winner of eligibleWinners) {
-    const amount = calculatePayoutShare(
+    const amountStroops = calculatePayoutShareStroops(
       winner.totalScore,
       totalPoints,
-      challenge.pool_amount_usdc
+      challenge.pool_amount_stroops
     );
 
-    if (parseFloat(amount) < 0.0000001) {
+    if (amountStroops < 1n) {
       continue;
     }
 
+    const amount = stroopsToUsdc(amountStroops);
     const payout = await createPayout({
       challengeId,
       userId: winner.userId,
       stellarAddress: winner.stellarAddress,
-      amountUsdc: amount,
+      amountStroops,
     });
 
     recipients.push({ address: winner.stellarAddress, amount });
-    payoutRecords.push({ id: payout.id, address: winner.stellarAddress, amount });
+    payoutRecords.push({ id: payout.id, address: winner.stellarAddress });
   }
 
   if (recipients.length === 0) {

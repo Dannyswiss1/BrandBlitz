@@ -73,7 +73,7 @@ CREATE TABLE challenges (
   challenge_id        TEXT NOT NULL UNIQUE,
   status              TEXT NOT NULL DEFAULT 'pending_deposit'
                         CHECK (status IN ('pending_deposit', 'active', 'ended', 'settled', 'payout_failed', 'cancelled')),
-  pool_amount_usdc    NUMERIC(20, 7) NOT NULL,
+  pool_amount_stroops BIGINT NOT NULL DEFAULT 0,
   stellar_deposit_tx  TEXT,
   deposit_address     TEXT,
   deposit_memo        TEXT UNIQUE,
@@ -178,7 +178,7 @@ CREATE TABLE payouts (
   challenge_id     UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
   user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   session_id       UUID NOT NULL REFERENCES game_sessions(id) ON DELETE CASCADE,
-  amount_usdc      NUMERIC(20, 7) NOT NULL,
+  amount_stroops   BIGINT NOT NULL DEFAULT 0,
   status           TEXT NOT NULL DEFAULT 'pending'
                      CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
   tx_hash          TEXT,

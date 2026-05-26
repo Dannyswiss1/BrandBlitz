@@ -77,6 +77,7 @@ const challengeFixture: Challenge = {
   id: "challenge-1",
   brand_id: "brand-1",
   challenge_id: "memo-1",
+  pool_amount_stroops: "900000000",
   pool_amount_usdc: "90.0000000",
   status: "ended",
   stellar_deposit_tx: null,
@@ -225,7 +226,12 @@ describe("processPayout", () => {
   });
 
   it("marks payouts failed when Stellar submission fails", async () => {
-    mocks.getChallengeById.mockResolvedValue({ ...challengeFixture, id: "challenge-3", pool_amount_usdc: "20.0000000" });
+    mocks.getChallengeById.mockResolvedValue({
+      ...challengeFixture,
+      id: "challenge-3",
+      pool_amount_stroops: "200000000",
+      pool_amount_usdc: "20.0000000",
+    });
     mocks.getLeaderboard.mockResolvedValue([
       buildLeaderboardSession({ id: "session-1", user_id: "user-1", total_score: 100, stellar_address: "GUSER1" }),
       buildLeaderboardSession({ id: "session-2", user_id: "user-2", total_score: 50, stellar_address: "GUSER2" }),
@@ -261,7 +267,12 @@ describe("processPayout", () => {
   });
 
   it("skips recipients whose share falls below the dust threshold", async () => {
-    mocks.getChallengeById.mockResolvedValue({ ...challengeFixture, id: "challenge-5", pool_amount_usdc: "0.0000001" });
+    mocks.getChallengeById.mockResolvedValue({
+      ...challengeFixture,
+      id: "challenge-5",
+      pool_amount_stroops: "1",
+      pool_amount_usdc: "0.0000001",
+    });
     mocks.getLeaderboard.mockResolvedValue([
       buildLeaderboardSession({ id: "session-1", user_id: "user-1", total_score: 9999999, stellar_address: "GUSER1" }),
       buildLeaderboardSession({ id: "session-2", user_id: "user-2", total_score: 1, stellar_address: "GUSER2" }),
@@ -281,7 +292,7 @@ describe("processPayout", () => {
       challengeId: "challenge-5",
       userId: "user-1",
       stellarAddress: "GUSER1",
-      amountUsdc: "0.0000001",
+      amountStroops: 1n,
     });
     expect(mocks.submitBatchPayout).toHaveBeenCalledWith(
       [{ address: "GUSER1", amount: "0.0000001" }],

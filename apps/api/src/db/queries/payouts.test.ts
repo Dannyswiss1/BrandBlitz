@@ -44,8 +44,8 @@ describeIntegration("payouts db queries", () => {
 
   async function createChallenge(brandId: string): Promise<string> {
     const result = await query<{ id: string }>(
-      `INSERT INTO challenges (brand_id, challenge_id, pool_amount_usdc) VALUES ($1, $2, $3) RETURNING id`,
-      [brandId, `memo-${randomUUID()}`, "100.0000000"]
+      `INSERT INTO challenges (brand_id, challenge_id, pool_amount_stroops) VALUES ($1, $2, $3) RETURNING id`,
+      [brandId, `memo-${randomUUID()}`, "1000000000"]
     );
     return result.rows[0].id;
   }
@@ -80,7 +80,7 @@ describeIntegration("payouts db queries", () => {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         brand_id UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
         challenge_id TEXT NOT NULL UNIQUE,
-        pool_amount_usdc NUMERIC(20,7) NOT NULL,
+        pool_amount_stroops BIGINT NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'pending_deposit'
       )
     `);
@@ -91,7 +91,7 @@ describeIntegration("payouts db queries", () => {
         challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         stellar_address TEXT NOT NULL,
-        amount_usdc NUMERIC(20,7) NOT NULL,
+        amount_stroops BIGINT NOT NULL DEFAULT 0,
         tx_hash TEXT UNIQUE,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -127,6 +127,7 @@ describeIntegration("payouts db queries", () => {
     expect(payout.user_id).toBe(userId);
     expect(payout.status).toBe("pending");
     expect(payout.amount_usdc).toBe(amount);
+    expect(payout.amount_stroops).toBe("123456789");
   });
 
   it("updatePayoutStatus transitions status correctly with optional txHash", async () => {
@@ -176,5 +177,6 @@ describeIntegration("payouts db queries", () => {
 
     const payout = await payouts.createPayout({ challengeId, userId, stellarAddress: "G", amountUsdc: preciseAmount });
     expect(payout.amount_usdc).toBe(preciseAmount);
+    expect(payout.amount_stroops).toBe("1234567890");
   });
 });

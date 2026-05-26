@@ -52,7 +52,7 @@ describeIntegration("challenges.ends_at > starts_at constraint", () => {
         id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         brand_id     UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
         challenge_id TEXT NOT NULL UNIQUE,
-        pool_amount_usdc NUMERIC(20,7) NOT NULL,
+        pool_amount_stroops BIGINT NOT NULL DEFAULT 0,
         starts_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         ends_at      TIMESTAMPTZ,
         CONSTRAINT challenges_ends_after_starts CHECK (ends_at IS NULL OR ends_at > starts_at)
@@ -81,7 +81,7 @@ describeIntegration("challenges.ends_at > starts_at constraint", () => {
   it("allows ends_at to be NULL", async () => {
     await expect(
       query(
-        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_usdc)
+        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_stroops)
          VALUES ($1, $2, 100)`,
         [brandId, `null-ends-${randomUUID()}`]
       )
@@ -91,7 +91,7 @@ describeIntegration("challenges.ends_at > starts_at constraint", () => {
   it("allows ends_at strictly after starts_at", async () => {
     await expect(
       query(
-        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_usdc, ends_at)
+        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_stroops, ends_at)
          VALUES ($1, $2, 100, NOW() + INTERVAL '1 hour')`,
         [brandId, `valid-ends-${randomUUID()}`]
       )
@@ -101,7 +101,7 @@ describeIntegration("challenges.ends_at > starts_at constraint", () => {
   it("rejects ends_at equal to starts_at (check_violation 23514)", async () => {
     await expect(
       query(
-        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_usdc, starts_at, ends_at)
+        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_stroops, starts_at, ends_at)
          VALUES ($1, $2, 100, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
         [brandId, `eq-ends-${randomUUID()}`]
       )
@@ -111,7 +111,7 @@ describeIntegration("challenges.ends_at > starts_at constraint", () => {
   it("rejects ends_at before starts_at (check_violation 23514)", async () => {
     await expect(
       query(
-        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_usdc, starts_at, ends_at)
+        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_stroops, starts_at, ends_at)
          VALUES ($1, $2, 100, '2026-06-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
         [brandId, `past-ends-${randomUUID()}`]
       )

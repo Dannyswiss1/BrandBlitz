@@ -86,7 +86,7 @@ describeIntegration("challenges db queries", () => {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         brand_id UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
         challenge_id TEXT NOT NULL UNIQUE,
-        pool_amount_usdc NUMERIC(20,7) NOT NULL,
+        pool_amount_stroops BIGINT NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'pending_deposit',
         stellar_deposit_tx TEXT,
         deposit_memo TEXT UNIQUE,
@@ -150,6 +150,7 @@ describeIntegration("challenges db queries", () => {
     expect(challenge.brand_id).toBe(brandId);
     expect(challenge.status).toBe("pending_deposit");
     expect(Number(challenge.pool_amount_usdc)).toBe(100);
+    expect(challenge.pool_amount_stroops).toBe("1000000000");
     expect(challenge.max_players).toBe(50);
     expect(challenge.stellar_deposit_tx).toBeNull();
     expect(challenge.payout_tx_hashes).toBeNull();
@@ -261,7 +262,7 @@ describeIntegration("challenges db queries", () => {
     expect(pendingInResults).toBe(false);
   });
 
-  it("getActiveChallenges orders by pool_amount_usdc DESC", async () => {
+  it("getActiveChallenges orders by pool_amount_stroops DESC", async () => {
     const userId = await createUser("active-order");
     const brandId = await createBrand(userId, "Order Brand");
 
@@ -515,13 +516,13 @@ describeIntegration("challenges db queries", () => {
         return `('${brandId}', 'perf-cid-${randomUUID()}', 100, 'perf-memo-${idx}-${randomUUID()}')`;
       }).join(",");
       await query(
-        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_usdc, deposit_memo) VALUES ${values}`
+        `INSERT INTO challenges (brand_id, challenge_id, pool_amount_stroops, deposit_memo) VALUES ${values}`
       );
     }
 
     const targetMemo = `target-memo-${randomUUID()}`;
     await query(
-      `INSERT INTO challenges (brand_id, challenge_id, pool_amount_usdc, deposit_memo)
+      `INSERT INTO challenges (brand_id, challenge_id, pool_amount_stroops, deposit_memo)
        VALUES ($1, $2, 50, $3)`,
       [brandId, `target-cid-${randomUUID()}`, targetMemo]
     );

@@ -1,4 +1,5 @@
 import type { ChallengeQuestion } from "../db/queries/challenges";
+import { calculatePayoutShareStroops, stroopsToUsdc, usdcToStroops } from "../lib/usdc";
 
 const BASE_POINTS = 100;
 const MAX_SPEED_BONUS = 50;
@@ -47,10 +48,12 @@ export function calculatePayoutShare(
   totalPointsAllUsers: number,
   poolAmountUsdc: string
 ): string {
-  if (totalPointsAllUsers === 0) return "0.0000000";
-  const pool = parseFloat(poolAmountUsdc);
-  const share = (userScore / totalPointsAllUsers) * pool;
-  return share.toFixed(7);
+  const stroops = calculatePayoutShareStroops(
+    userScore,
+    totalPointsAllUsers,
+    usdcToStroops(poolAmountUsdc)
+  );
+  return stroopsToUsdc(stroops);
 }
 
 /**

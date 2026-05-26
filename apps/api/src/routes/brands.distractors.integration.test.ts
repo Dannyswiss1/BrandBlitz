@@ -77,6 +77,7 @@ function buildChallenge(brandId: string): Challenge {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     brand_id: brandId,
     challenge_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    pool_amount_stroops: "500000000",
     pool_amount_usdc: "50.0000000",
     status: "pending_deposit",
     stellar_deposit_tx: null,
