@@ -134,10 +134,14 @@ export async function processPayout(challengeId: string): Promise<void> {
       hasFailure = true;
     }
 
+    const errorMessage = !result.success
+      ? (result.error ?? "Stellar broadcast failed with no error detail")
+      : undefined;
+
     for (const recipient of result.recipients) {
       const record = payoutRecords.find((candidate) => candidate.address === recipient.address);
       if (record) {
-        await updatePayoutStatus(record.id, status, result.txHash || undefined);
+        await updatePayoutStatus(record.id, status, result.txHash || undefined, errorMessage);
       }
     }
 

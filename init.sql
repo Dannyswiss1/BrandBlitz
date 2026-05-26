@@ -182,10 +182,12 @@ CREATE TABLE payouts (
   status           TEXT NOT NULL DEFAULT 'pending'
                      CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
   tx_hash          TEXT,
-  error_message    TEXT,
+  error_message    TEXT NOT NULL DEFAULT '',
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (challenge_id, user_id)
+  UNIQUE (challenge_id, user_id),
+  CONSTRAINT payouts_failed_requires_message
+    CHECK ((status = 'failed') = (LENGTH(error_message) > 0))
 );
 
 CREATE INDEX idx_payouts_challenge_id ON payouts (challenge_id);

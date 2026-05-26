@@ -31,16 +31,13 @@ export async function createPayout(data: {
 export async function updatePayoutStatus(
   id: string,
   status: PayoutStatus,
-  txHash?: string
+  txHash?: string,
+  errorMessage?: string
 ): Promise<void> {
-  if (txHash) {
-    await query(
-      "UPDATE payouts SET status = $1, tx_hash = $2 WHERE id = $3",
-      [status, txHash, id]
-    );
-  } else {
-    await query("UPDATE payouts SET status = $1 WHERE id = $2", [status, id]);
-  }
+  await query(
+    "UPDATE payouts SET status = $1, tx_hash = $2, error_message = $3 WHERE id = $4",
+    [status, txHash ?? null, errorMessage ?? "", id]
+  );
 }
 
 export async function getPendingPayouts(
