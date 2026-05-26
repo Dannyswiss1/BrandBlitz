@@ -1,3 +1,4 @@
+import { BUCKETS, getPublicUrl } from "@brandblitz/storage";
 import { query } from "../index";
 
 export interface Brand {
@@ -10,18 +11,32 @@ export interface Brand {
   tagline: string | null;
   brand_story: string | null;
   usp: string | null;
-  product_image_1_url: string | null;
-  product_image_2_url: string | null;
+  product_image_keys: string[];
   deleted_at?: string | null;
   created_at: string;
+}
+
+export type BrandApi = Brand & {
+  product_image_urls: string[];
+};
+
+export function getProductImageUrls(brand: Pick<Brand, "product_image_keys">): string[] {
+  return (brand.product_image_keys ?? []).map((key) => getPublicUrl(BUCKETS.BRAND_ASSETS, key));
+}
+
+export function toBrandApi(brand: Brand): BrandApi {
+  return {
+    ...brand,
+    product_image_urls: getProductImageUrls(brand),
+  };
 }
 
 export async function createBrand(data: Omit<Brand, "id" | "created_at">): Promise<Brand> {
   const result = await query<Brand>(
     `INSERT INTO brands
        (owner_user_id, name, logo_url, primary_color, secondary_color,
-        tagline, brand_story, usp, product_image_1_url, product_image_2_url)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        tagline, brand_story, usp, product_image_keys)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      RETURNING *`,
     [
       data.owner_user_id,
@@ -32,8 +47,7 @@ export async function createBrand(data: Omit<Brand, "id" | "created_at">): Promi
       data.tagline,
       data.brand_story,
       data.usp,
-      data.product_image_1_url,
-      data.product_image_2_url,
+      data.product_image_keys,
     ]
   );
   return result.rows[0];

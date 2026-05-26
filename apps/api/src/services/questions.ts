@@ -72,7 +72,7 @@ export function generateChallengeQuestions(
   }
 
   // — Round 3: Product recognition —
-  if (brand.product_image_1_url) {
+  if (brand.product_image_keys.length > 0) {
     const brandNames = pickDistractors(
       distractorPool.map((d) => d.name).filter(Boolean) as string[],
       brand.name,

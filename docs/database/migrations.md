@@ -33,6 +33,7 @@ This protects against the case where a migration is accidentally replayed agains
 | `001_phone_storage_schema.sql` | Adds `phone_hash` / `phone_verified_at` to `users`; drops legacy `phone_number` |
 | `002_drop_challenge_ended_at.sql` | Backfills `completed_at` from `challenge_ended_at`, then drops the redundant column |
 | `003_explicit_deposit_memo_index.sql` | Adds explicit btree index `idx_challenges_deposit_memo` on `challenges.deposit_memo` |
+| `011_product_image_keys.sql` | Stores product image object keys on `brands` and drops stored product image URL columns |
 
 ### CI validation (dual-path)
 

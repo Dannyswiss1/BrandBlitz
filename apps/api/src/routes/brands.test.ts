@@ -123,7 +123,9 @@ describe("Brands Routes Integration", () => {
         name: "Acme Corp",
         tagline: "The best in the west",
         primaryColor: "#ff0000",
-        logoKey: "logo.png"
+        logoKey: "logo.png",
+        productImage1Key: "product-1.png",
+        productImage2Key: "product-2.png"
       };
 
       const res = await request(app)
@@ -136,11 +138,17 @@ describe("Brands Routes Integration", () => {
         name: "Acme Corp",
         tagline: "The best in the west",
         primary_color: "#ff0000",
-        logo_url: "https://storage.example.com/brand-assets/optimized.webp"
+        logo_url: "https://storage.example.com/brand-assets/optimized.webp",
+        product_image_keys: ["optimized.webp", "optimized.webp"],
+        product_image_urls: [
+          "https://storage.example.com/brand-assets/optimized.webp",
+          "https://storage.example.com/brand-assets/optimized.webp",
+        ],
       });
 
       const dbRes = await query("SELECT * FROM brands WHERE id = $1", [res.body.brand.id]);
       expect(dbRes.rows[0].name).toBe("Acme Corp");
+      expect(dbRes.rows[0].product_image_keys).toEqual(["optimized.webp", "optimized.webp"]);
     });
 
     it("returns 400 for invalid payload (missing name)", async () => {
@@ -169,6 +177,7 @@ describe("Brands Routes Integration", () => {
       expect(Array.isArray(res.body.brands)).toBe(true);
       expect(res.body.brands.some((b: any) => b.name === "Acme Corp")).toBe(true);
       expect(res.body.brands.some((b: any) => b.name === "Second Brand")).toBe(true);
+      expect(res.body.brands.every((b: any) => Array.isArray(b.product_image_urls))).toBe(true);
     });
   });
 
@@ -186,6 +195,7 @@ describe("Brands Routes Integration", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.brand.name).toBe("Fetch Me");
+      expect(res.body.brand.product_image_urls).toEqual([]);
     });
 
     it("returns 403 for non-owner", async () => {
