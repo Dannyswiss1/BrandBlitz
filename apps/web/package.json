@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "a11y": "playwright test -c ../../e2e/playwright.config.ts a11y",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
     "test": "corepack pnpm exec vitest run",

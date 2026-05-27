@@ -1,0 +1,65 @@
+name: A11y
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "apps/api/**"
+      - "e2e/**"
+      - "docker-compose.yml"
+      - ".github/workflows/a11y.yml"
+
+# Accessibility gate for issue #120: runs @axe-core/playwright against the real
+# pages and fails the build on any serious/critical WCAG 2.1 A/AA violation, so
+# future PRs can't regress a11y.
+jobs:
+  a11y:
+    name: Accessibility (axe-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Bring up the application stack
+        run: docker compose up -d --build
+
+      - name: Wait for web to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000 >/dev/null; then
+              echo "web is up"; exit 0
+            fi
+            sleep 5
+          done
+          echo "web did not become ready in time" >&2
+          docker compose logs --no-color web | tail -n 100
+          exit 1
+
+      - name: Run accessibility suite
+        run: pnpm --filter @brandblitz/web a11y
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-playwright-report
+          path: e2e/artifacts/html-report
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
