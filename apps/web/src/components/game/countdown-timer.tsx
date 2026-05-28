@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCountdown } from "@/hooks/use-countdown";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 
@@ -11,26 +11,7 @@ interface CountdownTimerProps {
 }
 
 export function CountdownTimer({ durationSeconds, onExpire, className }: CountdownTimerProps) {
-  const [timeLeftMs, setTimeLeftMs] = useState(durationSeconds * 1000);
-
-  useEffect(() => {
-    const totalMs = durationSeconds * 1000;
-    setTimeLeftMs(totalMs);
-    const startTime = Date.now();
-    
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const remaining = Math.max(0, totalMs - elapsed);
-      setTimeLeftMs(remaining);
-
-      if (remaining === 0) {
-        clearInterval(interval);
-        onExpire?.();
-      }
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [durationSeconds, onExpire]);
+  const { timeLeftMs } = useCountdown({ durationSeconds, onExpire });
 
   const seconds = Math.ceil(timeLeftMs / 1000);
   const progress = (timeLeftMs / (durationSeconds * 1000)) * 100;

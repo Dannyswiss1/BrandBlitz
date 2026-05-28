@@ -1,44 +1,34 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 interface UseCountdownOptions {
-  seconds: number;
+  durationSeconds: number;
   onExpire?: () => void;
-  autoStart?: boolean;
 }
 
-export function useCountdown({ seconds, onExpire, autoStart = true }: UseCountdownOptions) {
-  const [timeLeft, setTimeLeft] = useState(seconds);
-  const [running, setRunning] = useState(autoStart);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+export function useCountdown({ durationSeconds, onExpire }: UseCountdownOptions) {
+  const [timeLeftMs, setTimeLeftMs] = useState(durationSeconds * 1000);
   const onExpireRef = useRef(onExpire);
   onExpireRef.current = onExpire;
 
   useEffect(() => {
-    if (!running) return;
+    const totalMs = durationSeconds * 1000;
+    setTimeLeftMs(totalMs);
+    const startTime = Date.now();
 
-    intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          clearInterval(intervalRef.current!);
-          setRunning(false);
-          onExpireRef.current?.();
-          return 0;
-        }
-        return t - 1;
-      });
-    }, 1000);
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, totalMs - elapsed);
+      setTimeLeftMs(remaining);
+      if (remaining === 0) {
+        clearInterval(interval);
+        onExpireRef.current?.();
+      }
+    }, 100);
 
-    return () => clearInterval(intervalRef.current!);
-  }, [running]);
+    return () => clearInterval(interval);
+  }, [durationSeconds]);
 
-  const start = useCallback(() => setRunning(true), []);
-  const pause = useCallback(() => setRunning(false), []);
-  const reset = useCallback(() => {
-    setRunning(false);
-    setTimeLeft(seconds);
-  }, [seconds]);
-
-  return { timeLeft, running, start, pause, reset };
+  return { timeLeftMs };
 }

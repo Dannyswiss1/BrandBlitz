@@ -42,6 +42,7 @@ export function UploadField({
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleFile = async (file: File) => {
     setError(null);
@@ -140,19 +141,37 @@ export function UploadField({
       ) : (
         <button
           type="button"
+          aria-label={label}
           onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+            const file = e.dataTransfer.files[0];
+            if (file) handleFile(file);
+          }}
+          onPaste={(e) => {
+            const file = e.clipboardData.files[0];
+            if (file) handleFile(file);
+          }}
           disabled={uploading}
           className={cn(
-            "w-full border-2 border-dashed border-[var(--border)] rounded-xl p-8 text-center transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]/50 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+            "w-full border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+            isDragging
+              ? "border-[var(--primary)] bg-[var(--muted)]/50"
+              : "border-[var(--border)] hover:border-[var(--primary)] hover:bg-[var(--muted)]/50"
           )}
         >
-          {uploading ? (
+          {isDragging ? (
+            <p className="text-sm font-medium text-[var(--primary)]">Drop here</p>
+          ) : uploading ? (
             <p className="text-sm text-[var(--muted-foreground)]">Uploading...</p>
           ) : (
             <>
               <p className="text-sm font-medium">{label}</p>
               <p className="text-xs text-[var(--muted-foreground)] mt-1">
-                Click to upload · {accept}
+                Click or drag &amp; drop · {accept}
               </p>
             </>
           )}

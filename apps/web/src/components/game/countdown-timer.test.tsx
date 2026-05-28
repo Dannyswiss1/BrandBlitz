@@ -98,11 +98,33 @@ describe('CountdownTimer', () => {
 
   it('does not leak intervals on unmount', () => {
     const { unmount } = render(<CountdownTimer durationSeconds={10} />);
-    
+
     expect(vi.getTimerCount()).toBe(1);
 
     unmount();
-    
+
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('parent re-renders with new onExpire identity do not restart the timer', () => {
+    const onExpire = vi.fn();
+
+    function Parent({ tick }: { tick: number }) {
+      // New arrow function every render — old bug would restart timer each time
+      return <CountdownTimer durationSeconds={5} onExpire={() => { onExpire(); void tick; }} />;
+    }
+
+    const { rerender } = render(<Parent tick={0} />);
+
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.getByText('4')).not.toBeNull();
+
+    for (let i = 1; i <= 10; i++) {
+      rerender(<Parent tick={i} />);
+    }
+
+    // Timer should have continued from 4s left, not restarted
+    act(() => { vi.advanceTimersByTime(4000); });
+    expect(onExpire).toHaveBeenCalledTimes(1);
   });
 });

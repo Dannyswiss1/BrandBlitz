@@ -296,6 +296,32 @@ describe("UploadField", () => {
     });
   });
 
+  // ── Drag and drop ─────────────────────────────────────────────────────────────
+
+  it("drag and drop: dropping a file triggers handleFile and calls the API", async () => {
+    defaultPresignResolve();
+
+    render(
+      <UploadField
+        label="Brand Logo"
+        uploadType="brand-logo"
+        apiToken="tok"
+        onUploaded={mocks.onUploaded}
+      />
+    );
+
+    const dropZone = screen.getByRole("button", { name: /brand logo/i });
+    const file = makeFile("logo.png", "image/png", 512);
+
+    fireEvent.drop(dropZone, {
+      dataTransfer: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(mocks.post).toHaveBeenCalledWith("/upload/presign", expect.anything());
+    });
+  });
+
   it("MIME error does not show a Retry button (no file to retry with)", async () => {
     render(
       <UploadField
