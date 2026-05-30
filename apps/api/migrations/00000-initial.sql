@@ -1,10 +1,7 @@
--- BrandBlitz PostgreSQL bootstrap.
--- Fresh installs load the baseline schema, then the forward migrations.
--- The files are included relative to this script so `psql -f init.sql` works
--- both in CI and in the Postgres container used by docker-compose.
+-- BrandBlitz Database Schema
+-- PostgreSQL 17
 
-\ir apps/api/migrations/00000-initial.sql
-\ir apps/api/migrations/00001-hot-path-indexes.sql
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- USERS
@@ -20,7 +17,6 @@ CREATE TABLE users (
   kyc_complete      BOOLEAN NOT NULL DEFAULT FALSE,
   stellar_address   TEXT,
   embedded_wallet_address TEXT,
-  referral_code     TEXT UNIQUE,
   phone_hash        TEXT UNIQUE,
   phone_verified    BOOLEAN NOT NULL DEFAULT FALSE,
   phone_verified_at TIMESTAMPTZ,
@@ -268,36 +264,6 @@ CREATE TABLE referrals (
 CREATE INDEX idx_referrals_referrer_id ON referrals (referrer_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- REFERRAL PAYOUTS
--- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE referral_payouts (
-  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  referral_id              UUID NOT NULL REFERENCES referrals(id) ON DELETE CASCADE UNIQUE,
-  challenge_id             UUID REFERENCES challenges(id) ON DELETE CASCADE,
-  referrer_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  referred_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  referrer_stellar_address TEXT,
-  referred_stellar_address TEXT,
-  referrer_amount_stroops  BIGINT NOT NULL DEFAULT 0,
-  referred_amount_stroops  BIGINT NOT NULL DEFAULT 0,
-  status                   TEXT NOT NULL DEFAULT 'pending'
-                             CHECK (status IN ('pending', 'sent', 'failed')),
-  tx_hash                  TEXT,
-  error_message            TEXT NOT NULL DEFAULT '',
-  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT referral_payouts_failed_requires_message
-    CHECK ((status = 'failed') = (LENGTH(error_message) > 0)),
-  CONSTRAINT referral_payouts_amounts_positive CHECK (
-    referrer_amount_stroops > 0 AND referred_amount_stroops > 0
-  )
-);
-
-CREATE INDEX idx_referral_payouts_referrer_id ON referral_payouts (referrer_id);
-CREATE INDEX idx_referral_payouts_referred_id ON referral_payouts (referred_id);
-CREATE INDEX idx_referral_payouts_status ON referral_payouts (status);
-
--- ─────────────────────────────────────────────────────────────────────────────
 -- UPDATED_AT trigger helper
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -319,7 +285,6 @@ CREATE TRIGGER fraud_flags_updated_at     BEFORE UPDATE ON fraud_flags      FOR 
 CREATE TRIGGER league_assignments_updated_at BEFORE UPDATE ON league_assignments FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER user_badges_updated_at     BEFORE UPDATE ON user_badges      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER referrals_updated_at       BEFORE UPDATE ON referrals       FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER referral_payouts_updated_at BEFORE UPDATE ON referral_payouts FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- APP CONFIG (runtime-tunable key/value store)

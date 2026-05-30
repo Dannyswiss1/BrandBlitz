@@ -5,6 +5,7 @@ void initSentry();
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
+import compression from "compression";
 import cookieParser from "cookie-parser";
 import { registerRoutes } from "./routes";
 import { errorHandler } from "./middleware/error";
@@ -31,6 +32,11 @@ app.use(
 );
 app.use(cookieParser());
 app.use(referralAttributionMiddleware);
+app.use(
+  compression({
+    threshold: 1024,
+  })
+);
 app.use(
   express.json({
     limit: "1mb",

@@ -4,13 +4,13 @@ on:
   push:
     paths:
       - 'init.sql'
-      - 'migrations/**'
+      - 'apps/api/migrations/**'
       - 'docs/DATABASE.md'
       - 'docs/db/er.svg'
   pull_request:
     paths:
       - 'init.sql'
-      - 'migrations/**'
+      - 'apps/api/migrations/**'
       - 'docs/DATABASE.md'
       - 'docs/db/er.svg'
 
@@ -60,11 +60,12 @@ jobs:
         run: psql -h localhost -p 5433 -U bb -d brandblitz_fresh -f init.sql
 
       # ── Migration path ────────────────────────────────────────────────────
-      - name: Apply migrations in order
+      - name: Apply baseline + migrations in order
         env:
           PGPASSWORD: bb
         run: |
-          for f in $(ls migrations/*.sql | sort); do
+          psql -h localhost -p 5434 -U bb -d brandblitz_migration -f apps/api/migrations/00000-initial.sql
+          for f in $(find apps/api/migrations -maxdepth 1 -type f -name '*.sql' ! -name '*.down.sql' ! -name '00000-initial.sql' | sort); do
             echo "Applying $f"
             psql -h localhost -p 5434 -U bb -d brandblitz_migration -f "$f"
           done

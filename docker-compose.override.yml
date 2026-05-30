@@ -22,6 +22,7 @@ services:
       - /bin/sh
       - -c
       - |
+        pnpm --filter @brandblitz/api migrate
         if [ "$$SEED_DEV" = "1" ]; then
           pnpm --filter @brandblitz/api seed
         fi

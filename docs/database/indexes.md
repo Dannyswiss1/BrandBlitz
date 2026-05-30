@@ -48,6 +48,94 @@ ORDER  BY mean_exec_time DESC
 LIMIT  10;
 ```
 
+## challenges.status + ends_at and leaderboard hot path
+
+The following migration adds the compound and partial indexes used by the
+challenge lifecycle and leaderboard queries:
+
+```sql
+CREATE INDEX idx_challenges_status_ends_at
+  ON challenges (status, ends_at);
+
+CREATE INDEX idx_game_sessions_leaderboard_hot_path
+  ON game_sessions (challenge_id, total_score DESC)
+  WHERE status = 'completed'
+    AND flagged = FALSE
+    AND is_practice = FALSE;
+```
+
+### Challenge filtering query
+
+```sql
+SELECT *
+FROM challenges
+WHERE status = 'active'
+  AND ends_at IS NOT NULL
+ORDER BY ends_at ASC;
+```
+
+**Before** the compound index, PostgreSQL has to scan the table and filter rows:
+
+```text
+Seq Scan on challenges
+  Filter: ((status = 'active'::text) AND (ends_at IS NOT NULL))
+```
+
+**After** the compound index, the planner can satisfy the filter with a direct
+index walk:
+
+```text
+Index Scan using idx_challenges_status_ends_at on challenges
+  Index Cond: ((status = 'active'::text) AND (ends_at IS NOT NULL))
+```
+
+### Leaderboard hot path
+
+```sql
+SELECT gs.*, u.email AS username, u.avatar_url, u.display_name, u.league, u.total_earned_usdc
+FROM game_sessions gs
+JOIN users u ON gs.user_id = u.id
+WHERE gs.challenge_id = $1
+  AND gs.flagged = FALSE
+  AND gs.is_practice = FALSE
+  AND gs.status = 'completed'
+ORDER BY gs.total_score DESC, gs.completed_at ASC
+LIMIT $2 OFFSET $3;
+```
+
+**Before** the partial index, PostgreSQL scans the status index and still has to
+filter the practice/flagged rows before sorting:
+
+```text
+Index Scan using idx_game_sessions_status on game_sessions gs
+  Filter: ((flagged = false) AND (is_practice = false) AND (status = 'completed'::text))
+  -> Sort
+```
+
+**After** the partial index, the planner can read the hot subset in score order:
+
+```text
+Index Scan using idx_game_sessions_leaderboard_hot_path on game_sessions gs
+  Index Cond: (challenge_id = $1)
+  -> Nested Loop Join to users
+```
+
+After applying the migration, run `ANALYZE` so the planner refreshes statistics
+for the new access paths.
+
+### Pending payout scan
+
+```sql
+SELECT *
+FROM payouts
+WHERE challenge_id = $1
+  AND status = 'pending'
+ORDER BY created_at ASC;
+```
+
+The new `idx_payouts_challenge_id_status` index keeps this hot path as a
+bounded index lookup instead of a wider status scan.
+
 ## game_sessions.user_id, completed_at - `idx_game_sessions_user_id_completed_at`
 
 ### Background

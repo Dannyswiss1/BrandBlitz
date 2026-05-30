@@ -260,7 +260,8 @@ brandblitz/
 ├── docker-compose.yml             8 services: web, api, worker, postgres,
 ├── docker-compose.override.yml    redis, nginx, minio, minio-setup
 ├── docker-compose.prod.yml
-├── init.sql          Full PostgreSQL schema (10 tables, indices, triggers)
+├── init.sql          Bootstrap entrypoint for the Postgres schema
+├── apps/api/migrations/  Baseline snapshot + forward migration files
 └── .env.example      All required environment variables with documentation
 ```
 
@@ -309,6 +310,9 @@ cp .env.example .env
 # Start all 8 services (hot-reload enabled in dev)
 docker compose up --build
 
+# API container applies pending migrations before starting the watcher
+# (use SEED_DEV=1 to seed after migrations)
+
 # Verify
 open http://localhost              # Next.js frontend
 curl http://localhost/api/health   # {"status":"ok"}
@@ -330,6 +334,22 @@ cp .env.example .env  # update DATABASE_URL, REDIS_URL to localhost
 
 pnpm dev  # Turborepo runs all packages in parallel
 ```
+
+---
+
+## Running Migrations
+
+```bash
+# Apply any pending API migrations
+pnpm --filter @brandblitz/api migrate
+
+# Check whether the database is already up to date
+pnpm --filter @brandblitz/api migrate:dryrun
+```
+
+`init.sql` is a bootstrap wrapper for fresh databases. The canonical schema
+snapshot is `apps/api/migrations/00000-initial.sql`, and new schema changes
+should land as forward migrations in `apps/api/migrations/`.
 
 ---
 

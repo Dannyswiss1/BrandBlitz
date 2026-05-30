@@ -8,6 +8,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./apps/api/migrations:/docker-entrypoint-initdb.d/apps/api/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U brandblitz -d brandblitz"]
       interval: 10s
@@ -62,6 +63,11 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
     environment:
       NODE_ENV: ${NODE_ENV}
       PORT: 3001
@@ -104,6 +110,11 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     command: ["node", "dist/worker.js"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
     environment:
       NODE_ENV: ${NODE_ENV}
       DATABASE_URL: postgresql://brandblitz:${POSTGRES_PASSWORD:-brandblitz_dev}@postgres:5432/brandblitz
@@ -136,6 +147,11 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
         NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
     environment:
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}

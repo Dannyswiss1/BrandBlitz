@@ -6,18 +6,19 @@ This document explains the canonical BrandBlitz schema, the current table relati
 
 ## Overview
 
-- `init.sql` is the canonical source for a fresh PostgreSQL schema.
-- `migrations/` contains incremental deltas for existing databases.
+- `init.sql` is a bootstrap script for fresh PostgreSQL instances.
+- `apps/api/migrations/00000-initial.sql` is the baseline schema snapshot.
+- `apps/api/migrations/` contains forward migrations plus optional rollback files.
 - `docs/db/er.svg` is auto-generated from the live schema.
 - `pnpm docs:db` regenerates the ER diagram from `DATABASE_URL` or the default local dev database.
-- CI validates that `docs/db/er.svg` is fresh for each change to `init.sql`, migrations, or docs.
+- CI validates that `docs/db/er.svg` is fresh for each change to `init.sql`, the API migrations, or docs.
 
 ## Conventions
 
 - Every table includes `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()` and `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`.
 - A shared trigger function updates `updated_at` on every row change.
-- `init.sql` should remain the single source of truth for fresh install schema.
-- `migrations/` should only contain schema deltas for existing deployments.
+- `init.sql` should remain a thin bootstrap wrapper.
+- `apps/api/migrations/` should be the source of truth for schema evolution.
 
 ## Domain ownership
 
