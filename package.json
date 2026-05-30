@@ -20,6 +20,7 @@
     "gitleaks:pre-commit": "git diff --cached --no-color | node scripts/gitleaks.mjs detect --pipe --redact --config .gitleaks.toml"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
     "@playwright/test": "1.51.1",
     "@vitest/coverage-v8": "4.1.2",
     "eslint": "10.1.0",
