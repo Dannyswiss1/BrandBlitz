@@ -55,16 +55,66 @@ export function ChallengePage({ params }: Props) {
     setCurrentRound(1);
   };
 
-  const handleAnswer = async (option: "A" | "B" | "C" | "D", reactionTimeMs: number) => {
+  // #154 — answer submission must surface errors instead of silently
+  // advancing. Strategy: retry with backoff a few times for transient
+  // failures, then surface an inline banner with a Retry button so
+  // the player can re-attempt without losing the round. We stash the
+  // last attempted answer in state so Retry replays the same payload.
+  const [answerError, setAnswerError] = React.useState<string | null>(null);
+  const lastAnswerRef = React.useRef<{ option: "A" | "B" | "C" | "D"; reactionTimeMs: number } | null>(null);
+
+  const ANSWER_MAX_ATTEMPTS = 3;
+  const ANSWER_RETRY_DELAY_MS = 500;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const submitAnswer = async (option: "A" | "B" | "C" | "D", reactionTimeMs: number) => {
     const apiToken = (session as any)?.apiToken as string;
     const api = createApiClient(apiToken);
-    const res = await api.post(`/sessions/${challengeId}/answer/${currentRound}`, { selectedOption: option, reactionTimeMs });
-    setScores((prev) => [...prev, res.data.score]);
-    if (currentRound < TOTAL_ROUNDS) {
-      setCurrentRound((r) => (r + 1) as 1 | 2 | 3);
-    } else {
-      setPhase("result");
+    let lastError: unknown;
+    for (let attempt = 0; attempt < ANSWER_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const res = await api.post(
+          `/sessions/${challengeId}/answer/${currentRound}`,
+          { selectedOption: option, reactionTimeMs },
+        );
+        return res.data.score as number;
+      } catch (err) {
+        lastError = err;
+        if (attempt < ANSWER_MAX_ATTEMPTS - 1) {
+          await sleep(ANSWER_RETRY_DELAY_MS);
+        }
+      }
     }
+    throw lastError;
+  };
+
+  const handleAnswer = async (option: "A" | "B" | "C" | "D", reactionTimeMs: number) => {
+    lastAnswerRef.current = { option, reactionTimeMs };
+    setAnswerError(null);
+    try {
+      const score = await submitAnswer(option, reactionTimeMs);
+      setScores((prev) => [...prev, score]);
+      // Advance ONLY after the server confirms the round was scored.
+      // Without this guarantee the `scores` array drifts out of sync
+      // with the server's view of the session.
+      if (currentRound < TOTAL_ROUNDS) {
+        setCurrentRound((r) => (r + 1) as 1 | 2 | 3);
+      } else {
+        setPhase("result");
+      }
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.message ??
+        err?.message ??
+        "Failed to submit answer. Check your connection and try again.";
+      setAnswerError(message);
+    }
+  };
+
+  const retryLastAnswer = () => {
+    const last = lastAnswerRef.current;
+    if (!last) return;
+    void handleAnswer(last.option, last.reactionTimeMs);
   };
 
   if (phase === "loading") {
@@ -74,13 +124,34 @@ export function ChallengePage({ params }: Props) {
       </div>
     );
   }
-  if (phase === "warmup" && challenge) return <WarmupPhase challenge={challenge} onComplete={handleWarmupComplete} />;
+  // #151 — `WarmupPhase` needs apiToken so it can call the
+  // authenticated API client instead of falling back to a missing
+  // /api/proxy/* route. Lifting apiToken into this render scope
+  // (rather than re-reading from session inside the child) keeps
+  // the auth context centralised.
+  const apiToken = (session as any)?.apiToken as string | undefined;
+  if (phase === "warmup" && challenge && apiToken) {
+    return (
+      <WarmupPhase
+        challenge={challenge}
+        apiToken={apiToken}
+        onComplete={handleWarmupComplete}
+      />
+    );
+  }
   if (phase === "challenge" && challenge) {
     const question = questions[currentRound - 1];
     if (!question) return null;
     return (
       <div className="min-h-screen p-6">
-        <ChallengeRound question={question} round={currentRound} onAnswer={handleAnswer} brandLogoUrl={challenge.logo_url ?? undefined} />
+        <ChallengeRound
+          question={question}
+          round={currentRound}
+          onAnswer={handleAnswer}
+          brandLogoUrl={challenge.logo_url ?? undefined}
+          answerError={answerError}
+          onRetry={retryLastAnswer}
+        />
       </div>
     );
   }
