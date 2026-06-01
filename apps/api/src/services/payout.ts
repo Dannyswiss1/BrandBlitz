@@ -1,5 +1,6 @@
 import { submitBatchPayout, type PayoutRecipient } from "@brandblitz/stellar";
 import type { NetworkName } from "@brandblitz/stellar";
+import { EscrowClient, type EscrowRecipient } from "@brandblitz/stellar";
 import { getLeaderboard } from "../db/queries/sessions";
 import {
   getChallengeById,
@@ -136,6 +137,51 @@ export async function processPayout(challengeId: string): Promise<void> {
   }
 
   const network = config.STELLAR_NETWORK as NetworkName;
+
+  // Use escrow contract for settlement if CONTRACT_ID is configured
+  if (config.SOROBAN_CONTRACT_ID) {
+    try {
+      const escrow = new EscrowClient({
+        contractId: config.SOROBAN_CONTRACT_ID,
+        horizonUrl: config.STELLAR_HORIZON_URL,
+        sorobanUrl: config.STELLAR_RPC_URL,
+        networkPassphrase: network === "testnet" ? "Test SDF Network ; September 2015" : "Public Global Stellar Network ; September 2015",
+      });
+
+      // Convert recipients to escrow format
+      const escrowRecipients: EscrowRecipient[] = payoutRecords.map((record) => ({
+        address: record.address,
+        amountStroops: record.amountStroops,
+      }));
+
+      // Settle via escrow contract
+      const txHash = await escrow.settle(escrowRecipients, config.HOT_WALLET_SECRET);
+
+      // Mark all payouts as sent
+      for (const record of payoutRecords) {
+        await updatePayoutStatus(record.id, "sent", txHash);
+        await incrementUserEarnings(record.userId, record.amount);
+
+        await queueReferralBonusForPayout({
+          referredUserId: record.userId,
+          challengeId,
+          referralWinAmountStroops: record.amountStroops,
+        });
+      }
+
+      await updateChallengeStatus(challengeId, "settled", { payoutTxHashes: [txHash] });
+      logger.info("Payout complete via escrow contract", { challengeId, txHash });
+      return;
+    } catch (error) {
+      logger.error("Escrow settlement failed, falling back to direct payout", {
+        challengeId,
+        error: (error as Error).message,
+      });
+      // Fall through to direct payout
+    }
+  }
+
+  // Fallback: direct payout via hot-wallet
   const results = await submitBatchPayout(
     recipients,
     config.HOT_WALLET_SECRET,
@@ -205,5 +251,5 @@ export async function processPayout(challengeId: string): Promise<void> {
     return;
   }
 
-  logger.info("Payout complete", { challengeId, txHashes });
+  logger.info("Payout complete via direct transfer", { challengeId, txHashes });
 }

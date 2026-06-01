@@ -7,6 +7,7 @@ import { WarmupPhase } from "@/components/game/warmup-phase";
 import { ChallengeRound } from "@/components/game/challenge-round";
 import { ResultScreen } from "@/components/game/result-screen";
 import { createApiClient, type Challenge, type ChallengeQuestion } from "@/lib/api";
+import { useFingerprint } from "@/hooks/use-fingerprint";
 import { TOTAL_ROUNDS } from "@/components/game/constants";
 
 type GamePhase = "loading" | "warmup" | "challenge" | "result";
@@ -19,6 +20,7 @@ export function ChallengePage({ params }: Props) {
   const { id: challengeId } = React.use(params);
   const { data: session, status } = useSession();
   const router = useRouter();
+  const visitorId = useFingerprint();
 
   const [challenge, setChallenge] = React.useState<Challenge | null>(null);
   const [questions, setQuestions] = React.useState<ChallengeQuestion[]>([]);
@@ -42,12 +44,14 @@ export function ChallengePage({ params }: Props) {
     api.get(`/challenges/${challengeId}`).then((res) => {
       setChallenge(res.data.challenge);
       setQuestions(res.data.questions);
-      api.post(`/sessions/${challengeId}/warmup-start`, { deviceId: undefined }).then((r) => {
+      // Send visitorId (FingerprintJS) as deviceId for anti-cheat multi-account detection
+      // If FingerprintJS fails to load, visitorId will be null and backend will flag for review
+      api.post(`/sessions/${challengeId}/warmup-start`, { deviceId: visitorId }).then((r) => {
         setSessionId(r.data.sessionId);
         setPhase("warmup");
       });
     });
-  }, [challengeId, session, status, router]);
+  }, [challengeId, session, status, router, visitorId]);
 
   const handleWarmupComplete = (token: string) => {
     setChallengeToken(token);

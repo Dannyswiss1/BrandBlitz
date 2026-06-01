@@ -123,15 +123,9 @@ const FormSchema = z.object({
           { skipErrorToast: true }
         );
 
-        const { hotWalletAddress, memo, amount } = challengeRes.data.depositInstructions;
-
-        router.push(
-          `/brand/${brandId}?depositAddress=${encodeURIComponent(
-            hotWalletAddress ?? ""
-          )}&memo=${encodeURIComponent(memo ?? "")}&amount=${encodeURIComponent(
-            amount ?? ""
-          )}`
-        );
+        // Deposit info is now fetched server-side from /challenges/:id/deposit-info
+        // Do NOT include secrets in URL query params
+        router.push(`/brand/${brandId}`);
       });
     } catch (err: any) {
       setError(err?.response?.data?.message ?? "Failed to create brand. Please try again.");

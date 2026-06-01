@@ -8,9 +8,10 @@ import {
 } from "../db/queries/challenges";
 import { getBrandById } from "../db/queries/brands";
 import { getLeaderboard, getArchivedLeaderboard } from "../db/queries/sessions";
-import { optionalAuth } from "../middleware/authenticate";
+import { optionalAuth, authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
 import { cached } from "../lib/cache";
+import { config } from "../lib/config";
 
 const router = Router();
 
@@ -92,6 +93,36 @@ router.get("/:id/leaderboard", async (req, res) => {
       totalEarned: s.total_earned_usdc,
       endedAt: s.completed_at,
     })),
+  });
+});
+
+/**
+ * GET /challenges/:id/deposit-info
+ * Get deposit instructions for a challenge (memo, address, amount).
+ * Only accessible to the brand owner.
+ * Returns 404 if requester is not the brand owner.
+ */
+router.get("/:id/deposit-info", authenticate, async (req, res) => {
+  const challenge = await getChallengeByIdAny(req.params.id);
+  if (!challenge) throw createError("Challenge not found", 404);
+
+  // Verify requester is the brand owner
+  const brand = await getBrandById(challenge.brand_id);
+  if (!brand || brand.owner_user_id !== req.user?.sub) {
+    throw createError("Forbidden", 403);
+  }
+
+  // Only return deposit info if challenge is pending deposit
+  if (challenge.status !== "pending_deposit") {
+    throw createError("Challenge is not pending deposit", 400);
+  }
+
+  res.json({
+    depositInfo: {
+      hotWalletAddress: config.HOT_WALLET_PUBLIC_KEY,
+      memo: challenge.id,
+      amount: challenge.pool_amount_usdc,
+    },
   });
 });
 
