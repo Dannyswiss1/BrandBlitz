@@ -66,6 +66,9 @@ export const configSchema = z.object({
 
   // Worker concurrency
   PAYOUT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
+
+  // Admin bootstrap — if set, this email is granted admin role on API boot
+  ADMIN_BOOTSTRAP_EMAIL: z.string().email().optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

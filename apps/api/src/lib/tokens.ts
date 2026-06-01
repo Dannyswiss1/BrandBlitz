@@ -11,7 +11,7 @@ export const ACCESS_TOKEN_TTL = "15m";
 export const REFRESH_TOKEN_TTL = "30d";
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-export interface AccessPayload { sub: string; email: string; jti: string; iat: number; exp: number; }
+export interface AccessPayload { sub: string; email: string; role: string; jti: string; iat: number; exp: number; }
 export interface RefreshPayload { sub: string; email: string; type: "refresh"; jti: string; iat: number; exp: number; }
 
 function accessSecret() { return config.JWT_SECRET; }
@@ -34,8 +34,8 @@ function previousAccessSecret(): string | undefined {
   return config.JWT_SECRET_PREVIOUS;
 }
 
-export function signAccessToken(user: { id: string; email: string }): string {
-  return jwt.sign({ sub: user.id, email: user.email, jti: randomUUID() }, accessSecret(), { expiresIn: ACCESS_TOKEN_TTL });
+export function signAccessToken(user: { id: string; email: string; role?: string | null }): string {
+  return jwt.sign({ sub: user.id, email: user.email, role: user.role ?? "player", jti: randomUUID() }, accessSecret(), { expiresIn: ACCESS_TOKEN_TTL });
 }
 
 export function signRefreshToken(user: { id: string; email: string }): string {

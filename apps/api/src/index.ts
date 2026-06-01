@@ -11,7 +11,8 @@ import { registerRoutes } from "./routes";
 import { errorHandler } from "./middleware/error";
 import { referralAttributionMiddleware } from "./middleware/referral-attribution";
 import { apiLimiter } from "./middleware/rate-limit";
-import { connectDb, closeDb } from "./db";
+import { requireHttps } from "./middleware/require-https";
+import { connectDb, closeDb, query } from "./db";
 import { connectRedis, redis } from "./lib/redis";
 import { payoutQueue } from "./queues/payout.queue";
 import { leagueQueue } from "./queues/league.queue";
@@ -31,6 +32,7 @@ app.use(
   }),
 );
 app.use(cookieParser());
+app.use(requireHttps);
 app.use(referralAttributionMiddleware);
 app.use(
   compression({
@@ -80,6 +82,19 @@ export { app };
 async function start(): Promise<void> {
   await connectDb();
   await connectRedis();
+
+  // ── Admin bootstrap ──────────────────────────────────────────────────────
+  if (config.ADMIN_BOOTSTRAP_EMAIL) {
+    const result = await query(
+      "UPDATE users SET role = 'admin', updated_at = NOW() WHERE email = $1 AND deleted_at IS NULL AND role != 'admin' RETURNING id, email",
+      [config.ADMIN_BOOTSTRAP_EMAIL]
+    );
+    if (result.rows.length > 0) {
+      logger.info(`Admin role granted to bootstrap email: ${result.rows[0].email}`);
+    } else {
+      logger.info(`Admin bootstrap: ${config.ADMIN_BOOTSTRAP_EMAIL} already admin or not found`);
+    }
+  }
 
   const server = app.listen(PORT, () => {
     logger.info(`API running on port ${PORT}`, { env: config.NODE_ENV });

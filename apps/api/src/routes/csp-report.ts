@@ -1,7 +1,25 @@
 import { Router, Request, Response } from "express";
+import { z } from "zod";
 import { logger } from "../lib/logger";
 
 const router = Router();
+
+const CspReportSchema = z.object({
+  "csp-report": z.object({
+    "document-uri": z.string().optional(),
+    "referrer": z.string().optional(),
+    "blocked-uri": z.string().optional(),
+    "violated-directive": z.string().optional(),
+    "effective-directive": z.string().optional(),
+    "original-policy": z.string().optional(),
+    "disposition": z.string().optional(),
+    "script-sample": z.string().optional(),
+    "source-file": z.string().optional(),
+    "line-number": z.coerce.number().optional(),
+    "column-number": z.coerce.number().optional(),
+    "status-code": z.coerce.number().optional(),
+  }),
+}).strict();
 
 /**
  * CSP Violation Report Endpoint
@@ -12,7 +30,12 @@ const router = Router();
  * Spec: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy-Report-Only
  */
 router.post("/", (req: Request, res: Response) => {
-  const report = req.body["csp-report"];
+  const parsed = CspReportSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Missing or invalid csp-report body" });
+    return;
+  }
+  const report = parsed.data["csp-report"];
 
   if (!report) {
     res.status(400).json({ error: "Missing csp-report body" });

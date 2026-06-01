@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../../middleware/authenticate";
+import { requireAdmin } from "../../middleware/require-admin";
 import { createError } from "../../middleware/error";
-import { findUserById } from "../../db/queries/users";
 import { softDeleteChallenge, restoreChallenge } from "../../db/queries/challenges";
 import { refundChallenge } from "../../services/refund";
 import { query } from "../../db/index";
@@ -10,12 +10,7 @@ import { query } from "../../db/index";
 const router = Router();
 
 router.use(authenticate);
-
-router.use(async (req, _res, next) => {
-  const user = await findUserById(req.user!.sub);
-  if (!user || user.role !== "admin") throw createError("Forbidden", 403, "FORBIDDEN");
-  next();
-});
+router.use(requireAdmin);
 
 router.post("/:id/refund", async (req, res) => {
   const { id } = z.object({ id: z.string().uuid() }).parse(req.params);

@@ -1,19 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../../middleware/authenticate";
+import { requireAdmin } from "../../middleware/require-admin";
 import { createError } from "../../middleware/error";
 import { getConfig, setConfig } from "../../db/queries/config";
-import { findUserById } from "../../db/queries/users";
 
 const router = Router();
 
 router.use(authenticate);
-
-router.use(async (req, _res, next) => {
-  const user = await findUserById(req.user!.sub);
-  if (!user || user.role !== "admin") throw createError("Forbidden", 403, "FORBIDDEN");
-  next();
-});
+router.use(requireAdmin);
 
 const PatchConfigSchema = z.object({
   value: z.record(z.unknown()),

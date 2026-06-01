@@ -17,6 +17,7 @@
     "docs:db": "cd ../../ && pnpm docs:db",
     "test": "corepack pnpm exec vitest run",
     "seed": "tsx scripts/seed.ts",
+    "admin:grant": "tsx scripts/admin-grant.ts",
     "gen:openapi": "tsx scripts/gen-openapi.ts",
     "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code -- ../../docs/openapi.yml"
   },

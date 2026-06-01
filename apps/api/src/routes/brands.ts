@@ -18,6 +18,7 @@ import {
 import { generateChallengeQuestions } from "../services/questions";
 import { optimizeImage, StorageError } from "@brandblitz/storage";
 import { authenticate } from "../middleware/authenticate";
+import { requireCurrentTosAccepted } from "../middleware/require-tos";
 import { createError } from "../middleware/error";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
@@ -131,7 +132,7 @@ router.post("/", authenticate, async (req, res) => {
  * Create a new challenge and generate questions from brand kit.
  * Returns the Stellar memo (challenge_id) for the deposit instructions.
  */
-router.post("/challenges", authenticate, async (req, res) => {
+router.post("/challenges", authenticate, requireCurrentTosAccepted, async (req, res) => {
   const body = ChallengeSchema.parse(req.body);
 
   const brand = await getBrandById(body.brandId);

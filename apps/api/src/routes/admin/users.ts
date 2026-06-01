@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../../middleware/authenticate";
+import { requireAdmin } from "../../middleware/require-admin";
 import { createError } from "../../middleware/error";
 import { findUserById, restoreUser } from "../../db/queries/users";
 import {
@@ -13,12 +14,7 @@ import { query } from "../../db/index";
 const router = Router();
 
 router.use(authenticate);
-
-router.use(async (req, _res, next) => {
-  const user = await findUserById(req.user!.sub);
-  if (!user || user.role !== "admin") throw createError("Forbidden", 403, "FORBIDDEN");
-  next();
-});
+router.use(requireAdmin);
 
 /**
  * POST /admin/users/:userId/erase
