@@ -659,6 +659,8 @@ S3-compatible object storage with image optimisation. Imported by `apps/api`. Wo
 - [`apps/api/README.md`](./apps/api/README.md) — Full API reference, all routes, middleware, services, database schema
 - [`apps/web/README.md`](./apps/web/README.md) — Frontend pages, components, auth flow, game state machine, upload flow
 - [`contracts/README.md`](./contracts/README.md) — Soroban escrow contract: build, test, deploy, full function reference
+- [`docs/adr/`](./docs/adr/README.md) — Architecture Decision Records (the "why" behind load-bearing engineering choices)
+- Interactive API reference — Scalar UI at `/docs` (local dev: <http://localhost:4000/docs>). Spec lives at [`docs/openapi.yml`](./docs/openapi.yml); regenerate via `pnpm --filter @brandblitz/api gen:openapi`.
 
 ---
 

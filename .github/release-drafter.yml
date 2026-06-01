@@ -1,0 +1,107 @@
+# release-drafter.yml — Automatic release notes configuration.
+#
+# Groups PR titles into changelog sections by label.
+# Labels are applied automatically by .github/labeler.yml and pr-meta.yml.
+#
+# Closes #83
+
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+# ── Version resolution ────────────────────────────────────────────────────────
+# Bump rules: a PR labelled "breaking" → major, "feat"/"feature" → minor,
+# everything else → patch.
+version-resolver:
+  major:
+    labels:
+      - "breaking"
+      - "type: breaking"
+  minor:
+    labels:
+      - "feat"
+      - "feature"
+      - "type: feat"
+  patch:
+    labels:
+      - "fix"
+      - "bug"
+      - "chore"
+      - "infra"
+      - "docs"
+      - "testing"
+      - "type: fix"
+      - "type: chore"
+  default: patch
+
+# ── Changelog categories ──────────────────────────────────────────────────────
+categories:
+  - title: "🚀 Features"
+    labels:
+      - "feat"
+      - "feature"
+      - "type: feat"
+
+  - title: "🐛 Bug Fixes"
+    labels:
+      - "fix"
+      - "bug"
+      - "type: fix"
+
+  - title: "🏗 Infrastructure & CI"
+    labels:
+      - "infra"
+      - "type: infra"
+
+  - title: "⚙️ Backend"
+    labels:
+      - "backend"
+
+  - title: "🎨 Frontend"
+    labels:
+      - "frontend"
+
+  - title: "🔗 Stellar / Contracts"
+    labels:
+      - "stellar"
+
+  - title: "🧪 Testing"
+    labels:
+      - "testing"
+
+  - title: "📖 Documentation"
+    labels:
+      - "docs"
+
+  - title: "🔧 Maintenance"
+    labels:
+      - "chore"
+      - "dependencies"
+      - "type: chore"
+
+# ── Exclude bot / automated PRs from the changelog ───────────────────────────
+exclude-labels:
+  - "skip-changelog"
+  - "release"
+
+# ── Release body template ─────────────────────────────────────────────────────
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  ---
+
+  ### 🐳 Docker Images
+
+  | Service | Image |
+  |---------|-------|
+  | API     | `ghcr.io/privexlabs/brandblitz-api:$RESOLVED_VERSION` |
+  | Web     | `ghcr.io/privexlabs/brandblitz-web:$RESOLVED_VERSION` |
+  | Worker  | `ghcr.io/privexlabs/brandblitz-worker:$RESOLVED_VERSION` |
+
+  ### 🔗 Deployment
+
+  - **Staging:** https://staging.brandblitz.app
+  - **Production:** https://brandblitz.app
+
+  **Full Changelog:** https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION

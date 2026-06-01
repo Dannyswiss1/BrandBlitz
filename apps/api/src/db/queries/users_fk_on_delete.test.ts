@@ -133,7 +133,7 @@ describeIntegration("FK ON DELETE behaviour (migration 012)", () => {
       [userId, challengeId]
     );
 
-    await query("DELETE FROM users WHERE id = $1", [userId]);
+    await query("DELETE FROM users WHERE id = $1 /* include_deleted */", [userId]);
 
     const { rows: [row] } = await query<{ user_id: string | null }>(
       "SELECT user_id FROM game_sessions WHERE id = $1",
@@ -152,7 +152,7 @@ describeIntegration("FK ON DELETE behaviour (migration 012)", () => {
       [challengeId, userId]
     );
 
-    await query("DELETE FROM users WHERE id = $1", [userId]);
+    await query("DELETE FROM users WHERE id = $1 /* include_deleted */", [userId]);
 
     const { rows: [row] } = await query<{ user_id: string | null }>(
       "SELECT user_id FROM payouts WHERE id = $1",
@@ -170,7 +170,7 @@ describeIntegration("FK ON DELETE behaviour (migration 012)", () => {
     );
 
     await expect(
-      query("DELETE FROM users WHERE id = $1", [userId])
+      query("DELETE FROM users WHERE id = $1 /* include_deleted */", [userId])
     ).rejects.toThrow();
   });
 });

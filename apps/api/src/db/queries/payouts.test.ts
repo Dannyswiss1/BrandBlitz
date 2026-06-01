@@ -63,7 +63,8 @@ describeIntegration("payouts db queries", () => {
       CREATE TABLE users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email TEXT NOT NULL UNIQUE,
-        display_name TEXT NOT NULL
+        display_name TEXT NOT NULL,
+        deleted_at TIMESTAMPTZ
       )
     `);
 

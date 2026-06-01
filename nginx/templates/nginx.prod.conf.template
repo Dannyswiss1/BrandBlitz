@@ -9,8 +9,11 @@ upstream api {
 }
 
 # Rate limiting zones
-limit_req_zone $binary_remote_addr zone=api_zone:10m rate=30r/s;
-limit_req_zone $binary_remote_addr zone=web_zone:10m rate=60r/s;
+# Coarse anti-abuse fence keyed by IP — raised to accommodate mobile carriers
+# and corporate NAT where thousands of users share one IP.
+# Fine-grained per-user limits are enforced at the application layer (rate-limit.ts).
+limit_req_zone $binary_remote_addr zone=api_zone:10m rate=200r/s;
+limit_req_zone $binary_remote_addr zone=web_zone:10m rate=200r/s;
 
 # Redirect HTTP → HTTPS
 server {
@@ -40,12 +43,13 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'nonce-$cspNonce'; img-src 'self' data: https://${CDN_HOST}; font-src 'self' https://fonts.gstatic.com; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; connect-src 'self' https://${API_HOST}; frame-ancestors 'none'; report-uri /api/csp-report" always;
 
     client_max_body_size 20M;
 
     # API proxy
     location /api/ {
-        limit_req zone=api_zone burst=50 nodelay;
+        limit_req zone=api_zone burst=500 nodelay;
 
         proxy_pass http://api/;
         proxy_http_version 1.1;
@@ -67,7 +71,7 @@ server {
 
     # Next.js app
     location / {
-        limit_req zone=web_zone burst=100 nodelay;
+        limit_req zone=web_zone burst=500 nodelay;
 
         proxy_pass http://web;
         proxy_http_version 1.1;

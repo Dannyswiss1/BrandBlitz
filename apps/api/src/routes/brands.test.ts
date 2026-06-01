@@ -150,7 +150,7 @@ describe("Brands Routes Integration", () => {
         ],
       });
 
-      const dbRes = await query("SELECT * FROM brands WHERE id = $1", [
+      const dbRes = await query("SELECT * FROM brands WHERE id = $1 /* include_deleted */", [
         res.body.brand.id,
       ]);
       expect(dbRes.rows[0].name).toBe("Acme Corp");

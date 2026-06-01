@@ -27,6 +27,7 @@ export interface Challenge {
   max_players: number | null;
   starts_at: string;
   ends_at: string | null;
+  deleted_at: string | null;
   created_at: string;
 }
 
@@ -70,7 +71,7 @@ export async function createChallenge(data: {
 
 export async function getChallengeByMemo(challengeId: string): Promise<Challenge | null> {
   const result = await query<Challenge>(
-    "SELECT *, (pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc FROM challenges WHERE deposit_memo = $1",
+    "SELECT *, (pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc FROM challenges WHERE deposit_memo = $1 AND deleted_at IS NULL",
     [challengeId]
   );
   return result.rows[0] ?? null;
@@ -78,7 +79,7 @@ export async function getChallengeByMemo(challengeId: string): Promise<Challenge
 
 export async function getChallengeByDepositTxHash(txHash: string): Promise<Challenge | null> {
   const result = await query<Challenge>(
-    "SELECT *, (pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc FROM challenges WHERE deposit_tx_hash = $1 LIMIT 1",
+    "SELECT *, (pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc FROM challenges WHERE deposit_tx_hash = $1 AND deleted_at IS NULL LIMIT 1",
     [txHash]
   );
   return result.rows[0] ?? null;
@@ -86,7 +87,7 @@ export async function getChallengeByDepositTxHash(txHash: string): Promise<Chall
 
 export async function getChallengeById(id: string): Promise<Challenge | null> {
   const result = await query<Challenge>(
-    "SELECT *, (pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc FROM challenges WHERE id = $1",
+    "SELECT *, (pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc FROM challenges WHERE id = $1 AND deleted_at IS NULL",
     [id]
   );
   return result.rows[0] ?? null;
@@ -99,7 +100,7 @@ export async function getArchivedChallengeById(id: string): Promise<Challenge | 
 
 export async function getChallengeByIdAny(id: string): Promise<Challenge & { archived: boolean } | null> {
   const result = await query<Challenge & { archived: boolean }>(
-    `SELECT *, false AS archived FROM challenges WHERE id = $1
+    `SELECT *, false AS archived FROM challenges WHERE id = $1 AND deleted_at IS NULL
      UNION ALL
      SELECT *, true AS archived FROM challenges_archive WHERE id = $1
      LIMIT 1`,
@@ -114,7 +115,7 @@ export async function getActiveChallenges(limit = 20, offset = 0): Promise<Chall
             b.name as brand_name, b.logo_url, b.primary_color, b.secondary_color
      FROM challenges c
      JOIN brands b ON c.brand_id = b.id
-     WHERE c.status = 'active'
+     WHERE c.status = 'active' AND c.deleted_at IS NULL AND b.deleted_at IS NULL
      ORDER BY c.pool_amount_stroops DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset]
@@ -132,12 +133,27 @@ export async function getChallengesByBrandId(
             b.name as brand_name, b.logo_url, b.primary_color, b.secondary_color
      FROM challenges c
      JOIN brands b ON c.brand_id = b.id
-     WHERE c.brand_id = $1
+     WHERE c.brand_id = $1 AND c.deleted_at IS NULL
      ORDER BY c.created_at DESC
      LIMIT $2 OFFSET $3`,
     [brandId, limit, offset]
   );
   return result.rows;
+}
+/**
+ * Soft-delete a challenge.
+ */
+export async function softDeleteChallenge(id: string): Promise<void> {
+  await query("UPDATE challenges SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL", [
+    id,
+  ]);
+}
+
+/**
+ * Restore a soft-deleted challenge.
+ */
+export async function restoreChallenge(id: string): Promise<void> {
+  await query("UPDATE challenges SET deleted_at = NULL, updated_at = NOW() WHERE id = $1", [id]);
 }
 
 export async function updateChallengeStatus(

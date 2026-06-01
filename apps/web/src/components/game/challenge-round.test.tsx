@@ -218,4 +218,61 @@ describe("ChallengeRound", () => {
     it.todo("number keys 1-4 select options (keyboard parity)");
     it.todo("arrow keys navigate between options");
   });
+
+  // ── #154 — answer-submission error UX ────────────────────────────────────
+
+  describe("answer-error surfacing (#154)", () => {
+    it("renders the inline error banner when answerError is set", () => {
+      render(
+        <ChallengeRound
+          question={buildQuestion()}
+          round={1}
+          onAnswer={vi.fn()}
+          answerError="network blip"
+        />,
+      );
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByText(/network blip/i)).toBeInTheDocument();
+    });
+
+    it("does not render the banner when answerError is null/undefined", () => {
+      const { rerender } = render(
+        <ChallengeRound question={buildQuestion()} round={1} onAnswer={vi.fn()} answerError={null} />,
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      rerender(
+        <ChallengeRound question={buildQuestion()} round={1} onAnswer={vi.fn()} />,
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("invokes onRetry when the Retry button is clicked", () => {
+      const onRetry = vi.fn();
+      render(
+        <ChallengeRound
+          question={buildQuestion()}
+          round={1}
+          onAnswer={vi.fn()}
+          answerError="server 500"
+          onRetry={onRetry}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it("omits the Retry button when onRetry is not supplied", () => {
+      render(
+        <ChallengeRound
+          question={buildQuestion()}
+          round={1}
+          onAnswer={vi.fn()}
+          answerError="permanent failure"
+        />,
+      );
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    });
+  });
 });

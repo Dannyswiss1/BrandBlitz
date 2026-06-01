@@ -59,7 +59,10 @@ export async function countReferralInvites(
   referrerId: string,
 ): Promise<number> {
   const result = await query<{ count: string }>(
-    "SELECT COUNT(*)::int AS count FROM referrals WHERE referrer_id = $1",
+    `SELECT COUNT(*)::int AS count
+     FROM referrals r
+     JOIN users u ON r.referred_id = u.id
+     WHERE r.referrer_id = $1 AND u.deleted_at IS NULL`,
     [referrerId],
   );
   return Number(result.rows[0]?.count ?? 0);
@@ -69,7 +72,10 @@ export async function countReferralConversions(
   referrerId: string,
 ): Promise<number> {
   const result = await query<{ count: string }>(
-    "SELECT COUNT(*)::int AS count FROM referrals WHERE referrer_id = $1 AND rewarded = TRUE",
+    `SELECT COUNT(*)::int AS count
+     FROM referrals r
+     JOIN users u ON r.referred_id = u.id
+     WHERE r.referrer_id = $1 AND r.rewarded = TRUE AND u.deleted_at IS NULL`,
     [referrerId],
   );
   return Number(result.rows[0]?.count ?? 0);

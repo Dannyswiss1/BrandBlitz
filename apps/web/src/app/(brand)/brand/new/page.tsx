@@ -17,16 +17,20 @@ export default function NewBrandPage() {
 
   if (status === "loading" || !session) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-pulse text-[var(--muted-foreground)]">Loading...</div>
+      <div className="mx-auto max-w-2xl px-6 py-12">
+        <div className="animate-pulse space-y-6">
+          <div className="h-9 w-56 rounded bg-[var(--muted)]" />
+          <div className="h-5 w-80 rounded bg-[var(--muted)]" />
+          <div className="h-96 rounded-lg bg-[var(--muted)]" />
+        </div>
       </div>
     );
   }
 
   return (
-    <main className="max-w-2xl mx-auto px-6 py-12">
-      <h1 className="text-3xl font-bold mb-2">Create Brand Kit</h1>
-      <p className="text-[var(--muted-foreground)] mb-8">
+    <main className="mx-auto max-w-2xl px-6 py-12">
+      <h1 className="mb-2 text-3xl font-bold">Create Brand Kit</h1>
+      <p className="mb-8 text-[var(--muted-foreground)]">
         Upload your brand assets and information to generate a challenge.
       </p>
       <BrandKitForm apiToken={session.apiToken} />

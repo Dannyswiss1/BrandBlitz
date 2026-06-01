@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { toast } from "@/lib/toast";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -122,7 +121,7 @@ export default function AdminFraudPage() {
         setPagination(res.data.pagination);
         setSelectedIds(new Set());
       } catch {
-        toast.error("Failed to load fraud flags.");
+        setFlags([]);
       } finally {
         setLoading(false);
       }
@@ -180,7 +179,7 @@ export default function AdminFraudPage() {
       setDialogOpen(false);
       await loadFlags(pagination.page);
     } catch {
-      toast.error("Action failed. Please try again.");
+      setDialogOpen(true);
     } finally {
       setSubmitting(false);
     }

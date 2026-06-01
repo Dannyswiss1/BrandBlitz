@@ -31,6 +31,7 @@ export function createArchiveWorker(): Worker {
             SELECT id FROM challenges
             WHERE status = 'settled'
               AND ended_at < NOW() - INTERVAL '90 days'
+              /* include_deleted */
           )
           RETURNING *
         ),
@@ -41,6 +42,7 @@ export function createArchiveWorker(): Worker {
           DELETE FROM challenges
           WHERE status = 'settled'
             AND ended_at < NOW() - INTERVAL '90 days'
+            /* include_deleted */
           RETURNING *
         )
         INSERT INTO challenges_archive SELECT * FROM moved_challenges

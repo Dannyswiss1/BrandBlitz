@@ -58,21 +58,21 @@ async function exhaust(app: express.Express, ip: string, n: number) {
 
 // ─── Per-policy boundary tests ─────────────────────────────────────────────────
 
-describe("apiLimiter — 100 req / 15 min", () => {
+describe("apiLimiter — 200 req / 15 min", () => {
   let ip: string;
 
   beforeEach(() => { ip = nextIp(); });
 
-  it("allows exactly 100 requests and blocks the 101st with 429", async () => {
+  it("allows exactly 200 requests and blocks the 201st with 429", async () => {
     const app = makeApp(apiLimiter);
-    await exhaust(app, ip, 100);
+    await exhaust(app, ip, 200);
     const over = await request(app).get("/").set("X-Forwarded-For", ip);
     expect(over.status).toBe(429);
   });
 
   it("sets Retry-After on the rate-limited response", async () => {
     const app = makeApp(apiLimiter);
-    await exhaust(app, ip, 100);
+    await exhaust(app, ip, 200);
     const over = await request(app).get("/").set("X-Forwarded-For", ip);
     expect(over.headers["retry-after"]).toBeDefined();
   });

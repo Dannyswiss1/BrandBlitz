@@ -1,0 +1,107 @@
+name: Release
+
+# Runs on every v* tag push and supports manual dispatch for retroactive releases.
+#
+# Steps:
+#   1. release-drafter drafts / publishes the GitHub Release with a grouped
+#      changelog built from PR titles and labels.
+#   2. A follow-up commit updates CHANGELOG.md on main with the same notes.
+#
+# Closes #83
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to generate release notes for (e.g. v1.2.3)"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  # ── Draft / publish the GitHub Release ──────────────────────────────────────
+  release-drafter:
+    name: Draft GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.drafter.outputs.tag_name }}
+      body: ${{ steps.drafter.outputs.body }}
+    steps:
+      - name: Determine tag
+        id: resolve-tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run release-drafter
+        id: drafter
+        uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          tag: ${{ steps.resolve-tag.outputs.tag }}
+          name: ${{ steps.resolve-tag.outputs.tag }}
+          publish: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Update CHANGELOG.md on main ─────────────────────────────────────────────
+  update-changelog:
+    name: Update CHANGELOG.md
+    runs-on: ubuntu-latest
+    needs: release-drafter
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          # Use a PAT so the commit triggers downstream CI workflows.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Prepend release notes to CHANGELOG.md
+        env:
+          TAG: ${{ needs.release-drafter.outputs.tag_name }}
+          BODY: ${{ needs.release-drafter.outputs.body }}
+          RELEASE_DATE: ${{ github.event.head_commit.timestamp }}
+        run: |
+          set -euo pipefail
+
+          DATE=$(date -u +"%Y-%m-%d")
+          HEADER="## [${TAG}] — ${DATE}"
+
+          # Build the new entry
+          NEW_ENTRY="${HEADER}
+
+          ${BODY}
+
+          ---
+          "
+
+          # Prepend after the top-level heading (line 1) if CHANGELOG exists,
+          # otherwise create it from scratch.
+          if [ -f CHANGELOG.md ]; then
+            # Insert after the first line (the # Changelog heading)
+            head -n 1 CHANGELOG.md > CHANGELOG.tmp
+            printf '\n%s\n' "${NEW_ENTRY}" >> CHANGELOG.tmp
+            tail -n +2 CHANGELOG.md >> CHANGELOG.tmp
+            mv CHANGELOG.tmp CHANGELOG.md
+          else
+            printf '# Changelog\n\n%s\n' "${NEW_ENTRY}" > CHANGELOG.md
+          fi
+
+      - name: Commit and push CHANGELOG.md
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          # Only commit if there are actual changes
+          git diff --cached --quiet || \
+            git commit -m "chore(release): update CHANGELOG.md for ${{ needs.release-drafter.outputs.tag_name }} [skip ci]"
+          git push origin main

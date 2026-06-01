@@ -54,6 +54,18 @@ export const configSchema = z.object({
 
   // Session integrity — rotated independently of JWT_SECRET; optional for backwards compat
   SESSION_INTEGRITY_KEY: z.string().min(32).optional(),
+
+  // Phone verification — HMAC salt for hashing phone numbers at rest
+  PHONE_HASH_SALT: z.string().min(16).optional(),
+
+  // E2E testing — enables mock Google OAuth flow; never set in production
+  E2E_MOCK_GOOGLE_OAUTH: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false"),
+
+  // Worker concurrency
+  PAYOUT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
 });
 
 export type Config = z.infer<typeof configSchema>;

@@ -70,7 +70,7 @@ export async function getBrandMetaById(
   id: string
 ): Promise<Pick<Brand, "id" | "owner_user_id" | "deleted_at"> | null> {
   const result = await query<Pick<Brand, "id" | "owner_user_id" | "deleted_at">>(
-    "SELECT id, owner_user_id, deleted_at FROM brands WHERE id = $1",
+    "SELECT id, owner_user_id, deleted_at FROM brands WHERE id = $1 /* include_deleted */",
     [id]
   );
   return result.rows[0] ?? null;
@@ -137,7 +137,7 @@ export async function updateBrand(
   const values = fields.map((f) => (updates as Record<string, unknown>)[f]);
 
   const result = await query<Brand>(
-    `UPDATE brands SET ${setClause} WHERE id = $1 AND owner_user_id = $2 RETURNING *`,
+    `UPDATE brands SET ${setClause} WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL RETURNING *`,
     [id, ownerUserId, ...values]
   );
   return result.rows[0] ?? null;

@@ -46,6 +46,32 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm validate-env-example
 
+  # ── OpenAPI spec drift (#143) ────────────────────────────────────────────────
+  openapi-drift:
+    name: OpenAPI spec drift (docs/openapi.yml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Regenerate spec
+        working-directory: apps/api
+        run: pnpm gen:openapi
+      - name: Fail on uncommitted drift
+        run: |
+          if ! git diff --exit-code -- docs/openapi.yml; then
+            echo ""
+            echo "::error::docs/openapi.yml is out of date."
+            echo "Run 'pnpm --filter @brandblitz/api gen:openapi' locally and commit the diff."
+            exit 1
+          fi
+
   # ── Unit tests ───────────────────────────────────────────────────────────────
   test-api:
     name: API unit tests

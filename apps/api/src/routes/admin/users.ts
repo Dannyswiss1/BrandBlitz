@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../../middleware/authenticate";
 import { createError } from "../../middleware/error";
-import { findUserById } from "../../db/queries/users";
+import { findUserById, restoreUser } from "../../db/queries/users";
 import {
   createErasureRequest,
   findPendingErasureRequest,
@@ -53,6 +53,24 @@ router.post("/:userId/erase", async (req, res) => {
     requestId: erasureRequest.id,
     executeAt: erasureRequest.execute_at,
   });
+});
+
+/**
+ * POST /admin/users/:userId/restore
+ * Restore a soft-deleted user account.
+ */
+router.post("/:userId/restore", async (req, res) => {
+  const { userId } = z.object({ userId: z.string().uuid() }).parse(req.params);
+
+  await restoreUser(userId);
+
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity, entity_key)
+     VALUES ($1, 'user_restore', 'user', $2)`,
+    [req.user!.sub, userId]
+  );
+
+  res.json({ message: "User account has been restored." });
 });
 
 export default router;

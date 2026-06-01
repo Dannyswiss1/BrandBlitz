@@ -1,5 +1,7 @@
 import { createError } from "../middleware/error";
+import { config } from "../lib/config";
 import { z } from "zod";
+import { config } from "../lib/config";
 
 const GoogleTokenInfoSchema = z.object({
   sub: z.string().min(1),
@@ -18,7 +20,7 @@ export interface VerifiedGoogleUser {
 }
 
 export async function verifyGoogleIdToken(idToken: string): Promise<VerifiedGoogleUser> {
-  if (process.env.E2E_MOCK_GOOGLE_OAUTH === "true" && idToken.startsWith("e2e:")) {
+  if (config.E2E_MOCK_GOOGLE_OAUTH === "true" && idToken.startsWith("e2e:")) {
     const [, rawEmail = "e2e-player@example.com", rawName = "E2E Player"] = idToken.split(":");
     return {
       googleId: `e2e-${rawEmail}`,
@@ -41,7 +43,7 @@ export async function verifyGoogleIdToken(idToken: string): Promise<VerifiedGoog
     throw createError("Google email is not verified", 401, "UNVERIFIED_GOOGLE_EMAIL");
   }
 
-  if (process.env.GOOGLE_CLIENT_ID && payload.aud !== process.env.GOOGLE_CLIENT_ID) {
+  if (config.GOOGLE_CLIENT_ID && payload.aud !== config.GOOGLE_CLIENT_ID) {
     throw createError("Invalid Google token audience", 401, "INVALID_GOOGLE_TOKEN");
   }
 

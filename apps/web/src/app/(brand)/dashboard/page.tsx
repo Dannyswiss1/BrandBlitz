@@ -83,11 +83,7 @@ export default function DashboardPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-pulse text-[var(--muted-foreground)]">Loading dashboard...</div>
-      </div>
-    );
+    return null;
   }
 
   return (

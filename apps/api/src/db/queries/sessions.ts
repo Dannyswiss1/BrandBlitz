@@ -263,6 +263,7 @@ export async function getLeaderboard(
        AND gs.flagged = FALSE
        AND gs.is_practice = FALSE
        AND gs.status = 'completed'
+       AND u.deleted_at IS NULL
      ORDER BY gs.total_score DESC, gs.completed_at ASC
      LIMIT $2 OFFSET $3`,
     [challengeId, limit, offset]
@@ -300,6 +301,7 @@ export async function getTopSessionsPerChallenge(
          AND gs.flagged = FALSE
          AND gs.is_practice = FALSE
          AND gs.status = 'completed'
+         AND u.deleted_at IS NULL
      )
      SELECT *
      FROM ranked
@@ -324,6 +326,7 @@ export async function getArchivedLeaderboard(
        AND gs.flagged = FALSE
        AND gs.is_practice = FALSE
        AND gs.status = 'completed'
+       AND u.deleted_at IS NULL
      ORDER BY gs.total_score DESC, gs.challenge_ended_at ASC
      LIMIT $2 OFFSET $3`,
     [challengeId, limit, offset]

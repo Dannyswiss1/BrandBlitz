@@ -1,20 +1,105 @@
 "use client";
 
+/**
+ * upload-field.tsx — Drag-and-drop / click file upload with full client-side
+ * validation before any network call is made.
+ *
+ * Validation order (all happen before presign):
+ *   1. MIME type check against the `uploadTypeConfig` allow-list
+ *   2. File size check against the per-type limit
+ *   3. Magic-byte check — reads the first 12 bytes to reject files whose
+ *      binary signature does not match the declared MIME type (e.g. an .exe
+ *      renamed to .png).
+ *
+ * Closes #160
+ */
+
 import { useRef, useState } from "react";
 import Image from "next/image";
 import { createApiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-interface UploadFieldProps {
+// ── Per-upload-type configuration ─────────────────────────────────────────────
+
+export interface UploadTypeConfig {
+  /** Allowed MIME types (exact match). */
+  allowedMimes: string[];
+  /** Maximum file size in bytes. */
+  maxSizeBytes: number;
+  /** Human-readable description shown in error messages. */
   label: string;
-  accept?: string;
-  maxSizeBytes?: number;
-  uploadType: "brand-logo" | "product-image" | "user-avatar";
-  apiToken: string;
-  onUploaded: (key: string, publicUrl: string) => void;
-  className?: string;
 }
+
+export const UPLOAD_TYPE_CONFIGS: Record<
+  "brand-logo" | "product-image" | "user-avatar",
+  UploadTypeConfig
+> = {
+  "brand-logo": {
+    allowedMimes: ["image/png", "image/svg+xml", "image/jpeg", "image/webp"],
+    maxSizeBytes: 2 * 1024 * 1024, // 2 MB
+    label: "Logo must be under 2 MB (PNG, SVG, JPG, or WebP)",
+  },
+  "product-image": {
+    allowedMimes: ["image/png", "image/jpeg", "image/webp", "image/gif"],
+    maxSizeBytes: 5 * 1024 * 1024, // 5 MB
+    label: "Product image must be under 5 MB (PNG, JPG, WebP, or GIF)",
+  },
+  "user-avatar": {
+    allowedMimes: ["image/png", "image/jpeg", "image/webp"],
+    maxSizeBytes: 1 * 1024 * 1024, // 1 MB
+    label: "Avatar must be under 1 MB (PNG, JPG, or WebP)",
+  },
+};
+
+// ── Magic-byte signatures ─────────────────────────────────────────────────────
+
+interface MagicSignature {
+  /** Byte offset to start reading from. */
+  offset: number;
+  /** Expected bytes at that offset. */
+  bytes: number[];
+}
+
+const MAGIC_BYTES: Record<string, MagicSignature[]> = {
+  "image/png": [{ offset: 0, bytes: [0x89, 0x50, 0x4e, 0x47] }],
+  "image/jpeg": [{ offset: 0, bytes: [0xff, 0xd8, 0xff] }],
+  "image/webp": [
+    // RIFF....WEBP
+    { offset: 0, bytes: [0x52, 0x49, 0x46, 0x46] },
+  ],
+  "image/gif": [
+    { offset: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] }, // GIF87a
+    { offset: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] }, // GIF89a
+  ],
+  // SVG is XML text — no reliable magic bytes; skip binary check.
+  "image/svg+xml": [],
+};
+
+/**
+ * Reads the first 12 bytes of `file` and checks them against known magic-byte
+ * signatures for the declared MIME type.
+ *
+ * Returns `true` if the signature matches (or if the MIME type has no known
+ * signature, e.g. SVG).  Returns `false` if the bytes clearly belong to a
+ * different format.
+ */
+export async function validateMagicBytes(file: File): Promise<boolean> {
+  const signatures = MAGIC_BYTES[file.type];
+  // Unknown MIME or SVG — skip binary check, rely on MIME allow-list only.
+  if (!signatures || signatures.length === 0) return true;
+
+  const headerSize = 12;
+  const slice = file.slice(0, headerSize);
+  const buffer = await slice.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+
+  return signatures.some((sig) =>
+    sig.bytes.every((b, i) => bytes[sig.offset + i] === b)
+  );
+}
+
+// ── MIME helper ───────────────────────────────────────────────────────────────
 
 /** Returns true if mimeType is covered by the `accept` attribute value. */
 function isAcceptedMime(mimeType: string, accept: string): boolean {
@@ -27,6 +112,8 @@ function isAcceptedMime(mimeType: string, accept: string): boolean {
       return mimeType === a;
     });
 }
+
+// ── Retry helper ──────────────────────────────────────────────────────────────
 
 /** Retry POST /upload/verify up to 3 times with 200 / 500 / 1000 ms backoff. */
 async function verifyWithRetry(
@@ -45,15 +132,37 @@ async function verifyWithRetry(
   }
 }
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
+interface UploadFieldProps {
+  label: string;
+  /** Passed to the hidden <input accept="…"> for the OS file picker. */
+  accept?: string;
+  /**
+   * Override the default per-type size limit.  Prefer leaving this unset and
+   * letting `UPLOAD_TYPE_CONFIGS` drive the limit.
+   */
+  maxSizeBytes?: number;
+  uploadType: "brand-logo" | "product-image" | "user-avatar";
+  apiToken: string;
+  onUploaded: (key: string, publicUrl: string) => void;
+  className?: string;
+}
+
 export function UploadField({
   label,
-  accept = "image/*",
+  accept,
   maxSizeBytes,
   uploadType,
   apiToken,
   onUploaded,
   className,
 }: UploadFieldProps) {
+  const typeConfig = UPLOAD_TYPE_CONFIGS[uploadType];
+  // Derive accept string from the type config if not explicitly provided.
+  const resolvedAccept = accept ?? typeConfig.allowedMimes.join(",");
+  const resolvedMaxBytes = maxSizeBytes ?? typeConfig.maxSizeBytes;
+
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
@@ -64,17 +173,27 @@ export function UploadField({
   const handleFile = async (file: File) => {
     setError(null);
 
-    // MIME validation — no network calls on failure
-    if (!isAcceptedMime(file.type, accept)) {
-      setError(`File type "${file.type}" is not allowed.`);
+    // 1. MIME type check — no network calls on failure
+    if (!isAcceptedMime(file.type, resolvedAccept)) {
+      setError(typeConfig.label);
       setPendingFile(null);
       return;
     }
 
-    // Size validation — no network calls on failure
-    if (maxSizeBytes !== undefined && file.size > maxSizeBytes) {
-      const maxMB = (maxSizeBytes / 1024 / 1024).toFixed(1);
-      setError(`File is too large. Maximum size is ${maxMB} MB.`);
+    // 2. File size check — no network calls on failure
+    if (file.size > resolvedMaxBytes) {
+      setError(typeConfig.label);
+      setPendingFile(null);
+      return;
+    }
+
+    // 3. Magic-byte check — rejects spoofed MIME (e.g. .exe renamed to .png)
+    const magicOk = await validateMagicBytes(file);
+    if (!magicOk) {
+      setError(
+        `The file does not appear to be a valid ${file.type.split("/")[1].toUpperCase()}. ` +
+          `Please choose a genuine image file.`
+      );
       setPendingFile(null);
       return;
     }
@@ -87,7 +206,7 @@ export function UploadField({
     try {
       const api = createApiClient(apiToken);
 
-      // 1. Get presigned URL
+      // 4. Get presigned URL
       const presignRes = await api.post("/upload/presign", {
         type: uploadType,
         contentType: file.type,
@@ -96,7 +215,7 @@ export function UploadField({
 
       const { uploadUrl, key, publicUrl } = presignRes.data;
 
-      // 2. Upload directly to S3/MinIO
+      // 5. Upload directly to S3/MinIO
       const putRes = await fetch(uploadUrl, {
         method: "PUT",
         body: file,
@@ -107,10 +226,9 @@ export function UploadField({
         throw new Error(`PUT failed with status ${putRes.status}`);
       }
 
-      // Track the key so we can abort if verify fails
       presignedKey = key;
 
-      // 3. Verify upload — retries 3× (200 / 500 / 1000 ms backoff)
+      // 6. Verify upload — retries 3× (200 / 500 / 1000 ms backoff)
       try {
         await verifyWithRetry(api, key);
       } catch {
@@ -133,8 +251,6 @@ export function UploadField({
           ? "Upload could not be confirmed. The file has been removed. Please try again."
           : "Upload failed. Please try again."
       );
-      // presignedKey being non-null here means PUT succeeded but we aborted above —
-      // nothing more to clean up at this point.
       void presignedKey;
     } finally {
       setUploading(false);
@@ -146,7 +262,7 @@ export function UploadField({
       <input
         ref={inputRef}
         type="file"
-        accept={accept}
+        accept={resolvedAccept}
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -183,7 +299,10 @@ export function UploadField({
           type="button"
           aria-label={label}
           onClick={() => inputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragging(true);
+          }}
           onDragLeave={() => setIsDragging(false)}
           onDrop={(e) => {
             e.preventDefault();
@@ -211,7 +330,7 @@ export function UploadField({
             <>
               <p className="text-sm font-medium">{label}</p>
               <p className="text-xs text-[var(--muted-foreground)] mt-1">
-                Click or drag &amp; drop · {accept}
+                {typeConfig.label}
               </p>
             </>
           )}
@@ -220,7 +339,9 @@ export function UploadField({
 
       {error && (
         <div className="space-y-1">
-          <p className="text-sm text-red-500">{error}</p>
+          <p role="alert" className="text-sm text-red-500">
+            {error}
+          </p>
           {pendingFile && (
             <Button
               variant="ghost"

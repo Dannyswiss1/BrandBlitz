@@ -88,17 +88,21 @@ const FormSchema = z.object({
 
         // Note: The API expects S3 keys (logoKey, productImageKeys).
         // The backend handles the conversion from these keys to public URLs after optimizing.
-        const brandRes = await api.post("/brands", {
-          name: fields.name,
-          tagline: fields.tagline,
-          brandStory: fields.brandStory,
-          primaryColor: fields.primaryColor,
-          secondaryColor: fields.secondaryColor,
-          logoKey,
-          usp: fields.tagline || undefined,
-          productImage1Key: productImageKeys[0],
-          productImage2Key: productImageKeys[1],
-        });
+        const brandRes = await api.post(
+          "/brands",
+          {
+            name: fields.name,
+            tagline: fields.tagline,
+            brandStory: fields.brandStory,
+            primaryColor: fields.primaryColor,
+            secondaryColor: fields.secondaryColor,
+            logoKey,
+            usp: fields.tagline || undefined,
+            productImage1Key: productImageKeys[0],
+            productImage2Key: productImageKeys[1],
+          },
+          { skipErrorToast: true }
+        );
 
         const brandId = brandRes.data.brand.id;
         const parsedDurationHours = Number.parseInt(fields.durationHours, 10);
@@ -109,21 +113,19 @@ const FormSchema = z.object({
 
         // Fix path if it should be /challenges instead of /brands/challenges or vice-versa
         // Assuming backend uses /brands/challenges based on the routes
-        const challengeRes = await api.post("/brands/challenges", {
-          brandId,
-          poolAmountUsdc: fields.poolAmountUsdc,
-          endsAt,
-        });
-
-        const { hotWalletAddress, memo, amount } = challengeRes.data.depositInstructions;
-
-        router.push(
-          `/brand/${brandId}?depositAddress=${encodeURIComponent(
-            hotWalletAddress ?? ""
-          )}&memo=${encodeURIComponent(memo ?? "")}&amount=${encodeURIComponent(
-            amount ?? ""
-          )}`
+        const challengeRes = await api.post(
+          "/brands/challenges",
+          {
+            brandId,
+            poolAmountUsdc: fields.poolAmountUsdc,
+            endsAt,
+          },
+          { skipErrorToast: true }
         );
+
+        // Deposit info is now fetched server-side from /challenges/:id/deposit-info
+        // Do NOT include secrets in URL query params
+        router.push(`/brand/${brandId}`);
       });
     } catch (err: any) {
       setError(err?.response?.data?.message ?? "Failed to create brand. Please try again.");
@@ -255,7 +257,6 @@ const FormSchema = z.object({
             <Label>Logo</Label>
             <UploadField
               label="Upload Brand Logo"
-              accept="image/png,image/svg+xml,image/jpeg,image/webp"
               uploadType="brand-logo"
               apiToken={apiToken}
               onUploaded={(key) => setLogoKey(key)}
@@ -266,7 +267,6 @@ const FormSchema = z.object({
             <Label>Product Images (optional)</Label>
             <UploadField
               label="Upload Product Image"
-              accept="image/*"
               uploadType="product-image"
               apiToken={apiToken}
               onUploaded={(key) =>

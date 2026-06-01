@@ -26,6 +26,7 @@ export interface User {
   last_play_day: string | null;
   streak_repairs_this_month: number;
   streak_repair_available: boolean;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -41,29 +42,29 @@ export interface PublicUser {
 }
 
 export async function findUserByEmail(email: string): Promise<User | null> {
-  const result = await query<User>("SELECT * FROM users WHERE email = $1 LIMIT 1", [email]);
+  const result = await query<User>("SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL LIMIT 1", [email]);
   return result.rows[0] ?? null;
 }
 
 export async function findUserByGoogleId(googleId: string): Promise<User | null> {
-  const result = await query<User>("SELECT * FROM users WHERE google_id = $1 LIMIT 1", [googleId]);
+  const result = await query<User>("SELECT * FROM users WHERE google_id = $1 AND deleted_at IS NULL LIMIT 1", [googleId]);
   return result.rows[0] ?? null;
 }
 
 export async function findUserById(id: string): Promise<User | null> {
-  const result = await query<User>("SELECT * FROM users WHERE id = $1 LIMIT 1", [id]);
+  const result = await query<User>("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1", [id]);
   return result.rows[0] ?? null;
 }
 
 export async function findUserByPhoneHash(phoneHash: string): Promise<User | null> {
-  const result = await query<User>("SELECT * FROM users WHERE phone_hash = $1 LIMIT 1", [
+  const result = await query<User>("SELECT * FROM users WHERE phone_hash = $1 AND deleted_at IS NULL LIMIT 1", [
     phoneHash,
   ]);
   return result.rows[0] ?? null;
 }
 
 export async function findUserByReferralCode(referralCode: string): Promise<User | null> {
-  const result = await query<User>("SELECT * FROM users WHERE referral_code = $1 LIMIT 1", [
+  const result = await query<User>("SELECT * FROM users WHERE referral_code = $1 AND deleted_at IS NULL LIMIT 1", [
     referralCode,
   ]);
   return result.rows[0] ?? null;
@@ -71,7 +72,7 @@ export async function findUserByReferralCode(referralCode: string): Promise<User
 
 export async function getUserReferralCode(userId: string): Promise<string | null> {
   const result = await query<{ referral_code: string | null }>(
-    "SELECT referral_code FROM users WHERE id = $1 LIMIT 1",
+    "SELECT referral_code FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1",
     [userId]
   );
   return result.rows[0]?.referral_code ?? null;
@@ -110,7 +111,7 @@ async function allocateUsername(
   const result = await client.query<{ username: string }>(
     `SELECT username
      FROM users
-     WHERE username = $1 OR username LIKE $2`,
+     WHERE (username = $1 OR username LIKE $2) AND deleted_at IS NULL`,
     [base, prefix]
   );
 
@@ -131,7 +132,7 @@ export async function getUserPublicProfileByUsername(username: string): Promise<
   const result = await query<PublicUser>(
     `SELECT display_name, username, league, total_earned_usdc, challenges_played, avatar_url, streak
      FROM users
-     WHERE username = $1`,
+     WHERE username = $1 AND deleted_at IS NULL`,
     [username]
   );
   return result.rows[0] ?? null;
@@ -213,7 +214,7 @@ export async function getUserStreak(userId: string): Promise<StreakState | null>
   const result = await query<StreakState>(
     `SELECT id, streak, last_play_day, streak_repairs_this_month, streak_repair_available
      FROM users
-     WHERE id = $1
+     WHERE id = $1 AND deleted_at IS NULL
      LIMIT 1`,
     [userId]
   );
@@ -271,11 +272,27 @@ export async function markPhoneVerified(userId: string, phoneHash: string): Prom
 }
 
 /**
+ * Soft-delete a user row.
+ */
+export async function softDeleteUser(userId: string): Promise<void> {
+  await query("UPDATE users SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL", [
+    userId,
+  ]);
+}
+
+/**
+ * Restore a soft-deleted user.
+ */
+export async function restoreUser(userId: string): Promise<void> {
+  await query("UPDATE users SET deleted_at = NULL, updated_at = NOW() WHERE id = $1", [userId]);
+}
+
+/**
  * Permanently remove a user row.
  * WARNING: DBA-only operation. Use GDPR anonymisation (anonymizeUser) for
  * right-to-erasure requests. Hard-delete is blocked while fraud_flags rows
  * reference this user (ON DELETE RESTRICT).
  */
 export async function hardDeleteUser(userId: string): Promise<void> {
-  await query("DELETE FROM users WHERE id = $1", [userId]);
+  await query("DELETE FROM users WHERE id = $1 /* include_deleted */", [userId]);
 }
