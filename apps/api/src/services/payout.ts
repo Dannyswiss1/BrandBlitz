@@ -1,4 +1,8 @@
-import { submitBatchPayout, type PayoutRecipient } from "@brandblitz/stellar";
+import {
+  isRetriableStellarError,
+  submitBatchPayout,
+  type PayoutRecipient,
+} from "@brandblitz/stellar";
 import type { NetworkName } from "@brandblitz/stellar";
 import { EscrowClient, type EscrowRecipient } from "@brandblitz/stellar";
 import { getLeaderboard } from "../db/queries/sessions";
@@ -137,6 +141,35 @@ export async function processPayout(challengeId: string): Promise<void> {
   }
 
   const network = config.STELLAR_NETWORK as NetworkName;
+  let results;
+  try {
+    results = await submitBatchPayout(
+      recipients,
+      config.HOT_WALLET_SECRET,
+      challengeId,
+      network,
+      {
+        onInvalidRecipient: (recipient, reason) => {
+          logger.error("Invalid payout recipient skipped", {
+            challengeId,
+            address: recipient.address,
+            amount: recipient.amount,
+            reason,
+          });
+        },
+      }
+    );
+  } catch (error) {
+    if (isRetriableStellarError(error)) {
+      logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    throw error;
+  }
 
   // Use escrow contract for settlement if CONTRACT_ID is configured
   if (config.SOROBAN_CONTRACT_ID) {
@@ -212,6 +245,8 @@ export async function processPayout(challengeId: string): Promise<void> {
           record.id,
           status,
           result.txHash || undefined,
+          result.success ? undefined : result.error
+        );
           errorMessage,
         );
         if (result.success) {
@@ -251,5 +286,6 @@ export async function processPayout(challengeId: string): Promise<void> {
     return;
   }
 
+  logger.info("Payout complete", { challengeId, txHashes });
   logger.info("Payout complete via direct transfer", { challengeId, txHashes });
 }

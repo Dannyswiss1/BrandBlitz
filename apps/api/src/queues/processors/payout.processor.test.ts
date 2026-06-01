@@ -4,6 +4,7 @@ import {
   PAYOUT_WORKER_CONCURRENCY,
   createPayoutWorker,
   payoutWorkerOptions,
+  handleExhaustedPayoutJob,
   processPayoutJob,
 } from "./payout.processor";
 import { payoutJobOptions } from "../payout.queue";
@@ -12,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   processPayout: vi.fn(),
   loggerInfo: vi.fn(),
   loggerError: vi.fn(),
+  failPayoutsForChallenge: vi.fn(),
+  query: vi.fn(),
 }));
 
 vi.mock("../../services/payout", () => ({
@@ -27,6 +30,14 @@ vi.mock("../../lib/logger", () => ({
 
 vi.mock("../../lib/redis", () => ({
   redis: {},
+}));
+
+vi.mock("../../db/queries/payouts", () => ({
+  failPayoutsForChallenge: mocks.failPayoutsForChallenge,
+}));
+
+vi.mock("../../db", () => ({
+  query: mocks.query,
 }));
 
 class FakeWorker {
@@ -167,9 +178,45 @@ describe("payout processor", () => {
       payoutJobOptions.attempts ?? 1
     );
 
-    expect(mocks.processPayout).toHaveBeenCalledTimes(3);
-    expect(result.attemptsMade).toBe(3);
+    expect(mocks.processPayout).toHaveBeenCalledTimes(5);
+    expect(result.attemptsMade).toBe(5);
     expect(result.error?.message).toBe("boom");
+  });
+
+  it("rethrows retriable Stellar network errors so BullMQ marks the job failed", async () => {
+    const networkError = Object.assign(new Error("Horizon timeout"), {
+      name: "NetworkError",
+    });
+    mocks.processPayout.mockRejectedValue(networkError);
+
+    await expect(processPayoutJob(makeJob("job-1", "challenge-1"))).rejects.toBe(
+      networkError
+    );
+  });
+
+  it("marks pending payouts failed and writes audit log after retries are exhausted", async () => {
+    const job = makeJob("job-1", "challenge-1", 5);
+    const err = new Error("Horizon timeout");
+
+    await handleExhaustedPayoutJob(job, err);
+
+    expect(mocks.failPayoutsForChallenge).toHaveBeenCalledWith(
+      "challenge-1",
+      "Horizon timeout"
+    );
+    expect(mocks.query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO audit_log"),
+      [
+        "payout_failed",
+        "challenge",
+        "challenge-1",
+        JSON.stringify({
+          jobId: "job-1",
+          attemptsMade: 5,
+          error: "Horizon timeout",
+        }),
+      ]
+    );
   });
 
   it("limits processing to two jobs in flight at a time", async () => {
@@ -209,7 +256,7 @@ describe("payout processor", () => {
 
   it("exposes queue defaults for retry, backoff, and cleanup policy", () => {
     expect(payoutJobOptions).toEqual({
-      attempts: 3,
+      attempts: 5,
       backoff: { type: "exponential", delay: 5000 },
       removeOnComplete: { count: 100 },
       removeOnFail: { count: 50 },

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   createPayout: vi.fn(),
   updatePayoutStatus: vi.fn(),
   submitBatchPayout: vi.fn(),
+  isRetriableStellarError: vi.fn(),
   queueAdd: vi.fn(),
   emitCounterMetric: vi.fn(),
   verifySessionHmac: vi.fn().mockReturnValue(true),
@@ -38,6 +39,7 @@ vi.mock("../db/queries/payouts", () => ({
 
 vi.mock("@brandblitz/stellar", () => ({
   submitBatchPayout: mocks.submitBatchPayout,
+  isRetriableStellarError: mocks.isRetriableStellarError,
 }));
 
 vi.mock("../queues/payout.queue", () => ({
@@ -115,6 +117,8 @@ function buildLeaderboardSession(
     created_at: "2026-04-24T10:00:00.000Z",
     username: "player@example.com",
     avatar_url: "https://example.com/avatar.png",
+    display_name: "Player",
+    league: "bronze",
     display_name: "Player One",
     league: null,
     total_earned_usdc: "0.0000000",
@@ -146,6 +150,7 @@ describe("processPayout", () => {
         },
       ]
     );
+    mocks.isRetriableStellarError.mockReturnValue(false);
   });
 
   it("builds a non-empty recipients list from ranked winners", async () => {
@@ -250,9 +255,43 @@ describe("processPayout", () => {
 
     await processPayout("challenge-3");
 
+    expect(mocks.updatePayoutStatus).toHaveBeenCalledWith(
+      "payout-user-1",
+      "failed",
+      undefined,
+      "tx_failed"
+    );
+    expect(mocks.updatePayoutStatus).toHaveBeenCalledWith(
+      "payout-user-2",
+      "failed",
+      undefined,
+      "tx_failed"
+    );
     expect(mocks.updatePayoutStatus).toHaveBeenCalledWith("payout-user-1", "failed", undefined, "tx_failed");
     expect(mocks.updatePayoutStatus).toHaveBeenCalledWith("payout-user-2", "failed", undefined, "tx_failed");
     expect(mocks.updateChallengeStatus).toHaveBeenCalledWith("challenge-3", "payout_failed", undefined);
+  });
+
+  it("rethrows retriable Stellar errors so the payout worker can retry", async () => {
+    const error = Object.assign(new Error("Horizon timeout"), { code: "ECONNABORTED" });
+    mocks.getLeaderboard.mockResolvedValue([
+      buildLeaderboardSession({
+        id: "session-1",
+        user_id: "user-1",
+        total_score: 100,
+        stellar_address: "GUSER1",
+      }),
+    ]);
+    mocks.submitBatchPayout.mockRejectedValue(error);
+    mocks.isRetriableStellarError.mockReturnValue(true);
+
+    await expect(processPayout("challenge-1")).rejects.toBe(error);
+
+    expect(mocks.updateChallengeStatus).not.toHaveBeenCalledWith(
+      "challenge-1",
+      "payout_failed",
+      expect.anything()
+    );
   });
 
   it("returns early when the challenge is not in the ended state", async () => {

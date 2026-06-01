@@ -32,6 +32,7 @@ export interface SubmitBatchPayoutOptions {
   sequenceStore?: SequenceStore;
   onSequenceReset?: (info: SequenceResetInfo) => void | Promise<void>;
   maxBadSeqRetries?: number;
+  onInvalidRecipient?: (recipient: PayoutRecipient, reason: string) => void;
 }
 
 /**
@@ -59,8 +60,23 @@ export async function submitBatchPayout(
     return account.sequenceNumber();
   };
 
+  const validRecipients = recipients.filter((recipient) => {
+    const reason = getInvalidRecipientReason(recipient);
+    if (!reason) return true;
+
+    if (options.onInvalidRecipient) {
+      options.onInvalidRecipient(recipient, reason);
+    } else {
+      console.warn("Skipping invalid payout recipient", { recipient, reason });
+    }
+
+    return false;
+  });
+
+  if (validRecipients.length === 0) return [];
+
   const results: PayoutBatchResult[] = [];
-  const batches = chunkArray(recipients, MAX_OPS_PER_TX);
+  const batches = chunkArray(validRecipients, MAX_OPS_PER_TX);
 
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
@@ -159,6 +175,41 @@ function isBadSequenceError(err: unknown): boolean {
     (err as any)?.data?.extras?.result_codes?.transaction;
 
   return txCode === "tx_bad_seq" || String((err as any)?.message ?? "").includes("tx_bad_seq");
+}
+
+export function isRetriableStellarError(err: unknown): boolean {
+  const code = (err as any)?.code;
+  const name = (err as any)?.name;
+  const message = String((err as any)?.message ?? "").toLowerCase();
+
+  return (
+    code === "ECONNABORTED" ||
+    name === "NetworkError" ||
+    name === "TimeoutError" ||
+    message.includes("networkerror") ||
+    message.includes("timeout") ||
+    message.includes("timed out")
+  );
+}
+
+function getInvalidRecipientReason(recipient: PayoutRecipient): string | null {
+  if (!recipient.address) {
+    return "missing address";
+  }
+
+  if (!isValidStellarAmount(recipient.amount)) {
+    return "amount must be a positive Stellar amount with up to 7 decimal places";
+  }
+
+  return null;
+}
+
+function isValidStellarAmount(amount: string): boolean {
+  if (!/^\d+(?:\.\d{1,7})?$/.test(amount)) {
+    return false;
+  }
+
+  return Number(amount) > 0;
 }
 
 function chunkArray<T>(array: T[], size: number): T[][] {

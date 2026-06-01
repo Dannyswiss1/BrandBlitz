@@ -11,6 +11,15 @@ import {
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { STELLAR_NETWORKS, type NetworkName } from "./constants";
 
+export function getNetworkConfig(name: NetworkName = "testnet") {
+  const config = STELLAR_NETWORKS[name];
+  if (!config) {
+    throw new Error(`Invalid network name: ${name}`);
+  }
+  return config;
+}
+
+export const getNetwork = getNetworkConfig;
 const maxSockets = Number(process.env.STELLAR_MAX_SOCKETS ?? "32");
 
 // One shared agent for all Horizon + Soroban HTTPS connections.
