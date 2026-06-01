@@ -77,7 +77,7 @@ const FormSchema = z.object({
 
     const validationResult = FormSchema.safeParse(fields);
     if (!validationResult.success) {
-      setError(validationResult.error.errors.map(err => err.message).join(", "));
+      setError(validationResult.error.issues.map(err => err.message).join(", "));
       return;
     }
 
@@ -88,17 +88,21 @@ const FormSchema = z.object({
 
         // Note: The API expects S3 keys (logoKey, productImageKeys).
         // The backend handles the conversion from these keys to public URLs after optimizing.
-        const brandRes = await api.post("/brands", {
-          name: fields.name,
-          tagline: fields.tagline,
-          brandStory: fields.brandStory,
-          primaryColor: fields.primaryColor,
-          secondaryColor: fields.secondaryColor,
-          logoKey,
-          usp: fields.tagline || undefined,
-          productImage1Key: productImageKeys[0],
-          productImage2Key: productImageKeys[1],
-        });
+        const brandRes = await api.post(
+          "/brands",
+          {
+            name: fields.name,
+            tagline: fields.tagline,
+            brandStory: fields.brandStory,
+            primaryColor: fields.primaryColor,
+            secondaryColor: fields.secondaryColor,
+            logoKey,
+            usp: fields.tagline || undefined,
+            productImage1Key: productImageKeys[0],
+            productImage2Key: productImageKeys[1],
+          },
+          { skipErrorToast: true }
+        );
 
         const brandId = brandRes.data.brand.id;
         const parsedDurationHours = Number.parseInt(fields.durationHours, 10);
@@ -109,21 +113,19 @@ const FormSchema = z.object({
 
         // Fix path if it should be /challenges instead of /brands/challenges or vice-versa
         // Assuming backend uses /brands/challenges based on the routes
-        const challengeRes = await api.post("/brands/challenges", {
-          brandId,
-          poolAmountUsdc: fields.poolAmountUsdc,
-          endsAt,
-        });
-
-        const { hotWalletAddress, memo, amount } = challengeRes.data.depositInstructions;
-
-        router.push(
-          `/brand/${brandId}?depositAddress=${encodeURIComponent(
-            hotWalletAddress ?? ""
-          )}&memo=${encodeURIComponent(memo ?? "")}&amount=${encodeURIComponent(
-            amount ?? ""
-          )}`
+        const challengeRes = await api.post(
+          "/brands/challenges",
+          {
+            brandId,
+            poolAmountUsdc: fields.poolAmountUsdc,
+            endsAt,
+          },
+          { skipErrorToast: true }
         );
+
+        // Deposit info is now fetched server-side from /challenges/:id/deposit-info
+        // Do NOT include secrets in URL query params
+        router.push(`/brand/${brandId}`);
       });
     } catch (err: any) {
       setError(err?.response?.data?.message ?? "Failed to create brand. Please try again.");
@@ -174,7 +176,7 @@ const FormSchema = z.object({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="primaryColor">Primary Color</Label>
               <div className="flex items-center gap-2">
@@ -194,11 +196,18 @@ const FormSchema = z.object({
                   className="font-mono"
                   pattern="^#[0-9a-f]{6}$"
                   aria-invalid={!HEX_COLOR_PATTERN.test(fields.primaryColor)}
+                  aria-describedby={
+                    !HEX_COLOR_PATTERN.test(fields.primaryColor)
+                      ? "primaryColorHexError"
+                      : undefined
+                  }
                   spellCheck={false}
                 />
               </div>
               {!HEX_COLOR_PATTERN.test(fields.primaryColor) ? (
-                <p className="text-xs text-red-500">Use format `#rrggbb` in lowercase.</p>
+                <p id="primaryColorHexError" className="text-xs text-red-500">
+                  Use format `#rrggbb` in lowercase.
+                </p>
               ) : null}
             </div>
             <div className="space-y-2">
@@ -220,11 +229,18 @@ const FormSchema = z.object({
                   className="font-mono"
                   pattern="^#[0-9a-f]{6}$"
                   aria-invalid={!HEX_COLOR_PATTERN.test(fields.secondaryColor)}
+                  aria-describedby={
+                    !HEX_COLOR_PATTERN.test(fields.secondaryColor)
+                      ? "secondaryColorHexError"
+                      : undefined
+                  }
                   spellCheck={false}
                 />
               </div>
               {!HEX_COLOR_PATTERN.test(fields.secondaryColor) ? (
-                <p className="text-xs text-red-500">Use format `#rrggbb` in lowercase.</p>
+                <p id="secondaryColorHexError" className="text-xs text-red-500">
+                  Use format `#rrggbb` in lowercase.
+                </p>
               ) : null}
             </div>
           </div>
@@ -241,7 +257,6 @@ const FormSchema = z.object({
             <Label>Logo</Label>
             <UploadField
               label="Upload Brand Logo"
-              accept="image/png,image/svg+xml,image/jpeg,image/webp"
               uploadType="brand-logo"
               apiToken={apiToken}
               onUploaded={(key) => setLogoKey(key)}
@@ -252,7 +267,6 @@ const FormSchema = z.object({
             <Label>Product Images (optional)</Label>
             <UploadField
               label="Upload Product Image"
-              accept="image/*"
               uploadType="product-image"
               apiToken={apiToken}
               onUploaded={(key) =>
@@ -308,7 +322,11 @@ const FormSchema = z.object({
       </Card>
 
       {error && (
-        <p className="text-sm text-red-500 bg-red-50 border border-red-200 rounded-lg p-3">
+        <p
+          role="alert"
+          aria-live="assertive"
+          className="text-sm text-red-500 bg-red-50 border border-red-200 rounded-lg p-3"
+        >
           {error}
         </p>
       )}

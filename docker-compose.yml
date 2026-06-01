@@ -8,6 +8,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./apps/api/migrations:/docker-entrypoint-initdb.d/apps/api/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U brandblitz -d brandblitz"]
       interval: 10s
@@ -62,6 +63,11 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
     environment:
       NODE_ENV: ${NODE_ENV}
       PORT: 3001
@@ -79,8 +85,8 @@ services:
       USDC_ISSUER: ${USDC_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_REGION: ${S3_REGION:-us-east-1}
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-brandblitz}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-brandblitz123}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-brandblitz}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-brandblitz123}
       S3_BUCKET_BRAND_ASSETS: ${S3_BUCKET_BRAND_ASSETS:-brand-assets}
       S3_BUCKET_SHARE_CARDS: ${S3_BUCKET_SHARE_CARDS:-share-cards}
       S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://localhost:9000}
@@ -104,6 +110,11 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     command: ["node", "dist/worker.js"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
     environment:
       NODE_ENV: ${NODE_ENV}
       DATABASE_URL: postgresql://brandblitz:${POSTGRES_PASSWORD:-brandblitz_dev}@postgres:5432/brandblitz
@@ -114,46 +125,68 @@ services:
       HOT_WALLET_SECRET: ${HOT_WALLET_SECRET}
       HOT_WALLET_PUBLIC_KEY: ${HOT_WALLET_PUBLIC_KEY}
       USDC_ISSUER: ${USDC_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-brandblitz}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-brandblitz123}
-      S3_BUCKET_BRAND_ASSETS: ${S3_BUCKET_BRAND_ASSETS:-brand-assets}
-      S3_BUCKET_SHARE_CARDS: ${S3_BUCKET_SHARE_CARDS:-share-cards}
-      S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://localhost:9000}
-      S3_FORCE_PATH_STYLE: "true"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
 
+  deposit-monitor:
+    image: ${IMAGE_REGISTRY:-ghcr.io/privexlabs}/brandblitz-deposit-monitor:${APP_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: apps/deposit-monitor/Dockerfile
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      REDIS_URL: redis://redis:6379
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      HOT_WALLET_PUBLIC_KEY: ${HOT_WALLET_PUBLIC_KEY}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      API_URL: http://api:3001
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
   web:
     image: ${IMAGE_REGISTRY:-ghcr.io/privexlabs}/brandblitz-web:${APP_VERSION:-dev}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
-        NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
     environment:
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NODE_ENV: ${NODE_ENV}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+      NEXT_PUBLIC_STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+      NEXT_PUBLIC_S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://localhost:9000}
     depends_on:
-      - api
+      api:
+        condition: service_started
 
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:stable-alpine
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - web
       - api
+      - web
 
 volumes:
   postgres_data:

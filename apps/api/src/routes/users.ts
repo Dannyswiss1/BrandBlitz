@@ -8,6 +8,9 @@ import {
   updateUserWallet,
   getUserPublicProfileByUsername,
 } from "../db/queries/users";
+import { getReferralStats } from "../services/referrals";
+import { stroopsToUsdc } from "../lib/usdc";
+import { getStreak, repairStreak } from "../services/streaks";
 import {
   sendVerificationCode,
   checkVerificationCode,
@@ -53,23 +56,45 @@ router.get("/me", authenticate, async (req, res) => {
 });
 
 router.get("/me/streak", authenticate, async (req, res) => {
-  const user = await findUserById(req.user!.sub);
-  if (!user) throw createError("User not found", 404);
+  const streak = await getStreak(req.user!.sub).catch(() => null);
+  if (!streak) throw createError("User not found", 404);
 
-  const milestones = [3, 7, 14, 30];
-  const nextMilestone = milestones.find((m) => m > user.streak) ?? milestones[milestones.length - 1];
-  const progress = Math.min(1, user.streak / Math.max(1, nextMilestone));
+  res.json(streak);
+});
 
-  const lastPlayDay = user.last_play_day ? new Date(user.last_play_day).toISOString().slice(0, 10) : null;
-  const today = new Date().toISOString().slice(0, 10);
-  const milestoneJustHit = milestones.includes(user.streak) && lastPlayDay === today;
+router.get("/:id/streak", authenticate, async (req, res) => {
+  const { id } = z.object({ id: z.string() }).parse(req.params);
+  if (id !== req.user!.sub) throw createError("Forbidden", 403, "FORBIDDEN");
+
+  const streak = await getStreak(id).catch(() => null);
+  if (!streak) throw createError("User not found", 404);
 
   res.json({
-    streak: user.streak,
-    nextMilestone,
-    progress,
-    milestoneJustHit,
+    streak: streak.streak,
+    last_play_day: streak.lastPlayDay,
+    repair_available: streak.repairAvailable,
   });
+});
+
+router.get("/me/referrals/stats", authenticate, async (req, res) => {
+  const stats = await getReferralStats(req.user!.sub);
+
+  res.json({
+    referralCode: stats.referralCode,
+    invitesSent: stats.invitesSent,
+    conversions: stats.conversions,
+    totalEarned: stroopsToUsdc(stats.totalEarnedStroops),
+    totalEarnedUsdc: stroopsToUsdc(stats.totalEarnedStroops),
+  });
+});
+
+router.post("/streaks/repair", authenticate, async (req, res) => {
+  const repaired = await repairStreak(req.user!.sub);
+  if (!repaired) {
+    throw createError("Monthly streak repair already used", 409, "STREAK_REPAIR_LIMIT");
+  }
+
+  res.json(repaired);
 });
 
 /**

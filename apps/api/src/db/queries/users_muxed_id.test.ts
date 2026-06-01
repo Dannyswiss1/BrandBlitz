@@ -91,7 +91,7 @@ describeIntegration("users muxed_id partial unique index", () => {
 
     try {
       const plan = await query<{ "QUERY PLAN": string }>(
-        "EXPLAIN SELECT id FROM users WHERE muxed_id = $1",
+        "EXPLAIN SELECT id FROM users WHERE muxed_id = $1 /* include_deleted */",
         [12345]
       );
 

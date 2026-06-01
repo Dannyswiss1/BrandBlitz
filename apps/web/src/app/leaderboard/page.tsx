@@ -6,23 +6,29 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 
-async function getGlobalLeaderboard(): Promise<{ entries: LeaderboardEntry[]; failed: boolean }> {
+async function getGlobalLeaderboard(): Promise<{
+  entries: LeaderboardEntry[];
+  hasMore: boolean;
+  failed: boolean;
+}> {
   try {
-    const res = await api.get("/leaderboard/global");
+    const res = await api.get("/leaderboard/global?limit=50&offset=0");
     return {
       entries: res.data.leaderboard,
+      hasMore: Boolean(res.data.pagination?.hasMore),
       failed: false,
     };
   } catch {
     return {
       entries: [],
+      hasMore: false,
       failed: true,
     };
   }
 }
 
 export default async function LeaderboardPage() {
-  const { entries, failed } = await getGlobalLeaderboard();
+  const { entries, hasMore, failed } = await getGlobalLeaderboard();
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -47,7 +53,7 @@ export default async function LeaderboardPage() {
               />
             </div>
           ) : (
-            <LiveGlobalLeaderboard initial={entries} />
+            <LiveGlobalLeaderboard initial={entries} initialHasMore={hasMore} />
           )}
         </CardContent>
       </Card>

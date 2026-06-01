@@ -65,6 +65,7 @@ describeIntegration("brands db queries", () => {
         brand_story TEXT,
         usp TEXT,
         product_image_keys TEXT[] NOT NULL DEFAULT '{}',
+        deleted_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);

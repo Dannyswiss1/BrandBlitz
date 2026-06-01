@@ -14,6 +14,13 @@ interface ChallengeRoundProps {
   onAnswer: (option: "A" | "B" | "C" | "D" | null, reactionTimeMs: number) => void;
   brandLogoUrl?: string;
   brandProductImageUrl?: string;
+  /** #154 — inline error banner when the parent's answer submission
+   *  fails after retries. Null / undefined = no error. */
+  answerError?: string | null;
+  /** #154 — replay the last submitted answer with fresh network
+   *  calls. The parent owns the retry payload; the component just
+   *  wires the click. */
+  onRetry?: () => void;
 }
 
 const OPTIONS: ("A" | "B" | "C" | "D")[] = ["A", "B", "C", "D"];
@@ -24,6 +31,8 @@ export function ChallengeRound({
   onAnswer,
   brandLogoUrl,
   brandProductImageUrl,
+  answerError = null,
+  onRetry,
 }: ChallengeRoundProps) {
   const [selected, setSelected] = useState<"A" | "B" | "C" | "D" | null>(null);
   const [answered, setAnswered] = useState(false);
@@ -151,6 +160,27 @@ export function ChallengeRound({
           </Button>
         ))}
       </div>
+
+      {/* #154 — Answer submission error banner with retry. */}
+      {answerError && (
+        <div
+          role="alert"
+          className="mt-4 rounded-md border border-red-500/50 bg-red-500/10 p-4 text-sm"
+        >
+          <p className="text-red-500">Failed to submit answer: {answerError}</p>
+          {onRetry && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={onRetry}
+            >
+              Retry
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

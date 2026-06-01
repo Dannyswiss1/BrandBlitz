@@ -6,13 +6,13 @@ Tracks a single user's participation in one challenge.
 
 ### Timestamps
 
-| Column | Meaning |
-|---|---|
-| `created_at` | Row inserted (session created) |
-| `warmup_started_at` | User entered warmup phase |
-| `warmup_completed_at` | User passed warmup gate |
-| `challenge_started_at` | First question delivered |
-| `completed_at` | All rounds answered; session finalised |
+| Column                 | Meaning                                |
+| ---------------------- | -------------------------------------- |
+| `created_at`           | Row inserted (session created)         |
+| `warmup_started_at`    | User entered warmup phase              |
+| `warmup_completed_at`  | User passed warmup gate                |
+| `challenge_started_at` | First question delivered               |
+| `completed_at`         | All rounds answered; session finalised |
 
 `completed_at` is the **canonical end timestamp**. It is set by `finishSession()` and used as the tiebreaker in leaderboard ordering (`total_score DESC, completed_at ASC` — fastest finisher wins ties).
 
@@ -39,6 +39,10 @@ CREATE UNIQUE INDEX users_muxed_id_unique
 
 This preserves the intended semantics while keeping NULL-only rows out of the uniqueness index. Equality lookups such as `WHERE muxed_id = $1` can use the partial index because the predicate implies `muxed_id IS NOT NULL`.
 
+### wallet fields
+
+`users.embedded_wallet_address` is present in the canonical schema alongside `stellar_address`. Application code treats it as the preferred payout wallet when populated, falling back to `stellar_address` otherwise.
+
 ## challenges
 
 ### deposit_memo lookup
@@ -61,8 +65,8 @@ A challenge with a defined end date must end strictly after it starts. `NULL` `e
 
 Runtime-tunable key/value store added in `migrations/010_app_config.sql`.
 
-| key | default value | description |
-|-----|---------------|-------------|
+| key                     | default value                                                    | description                                                              |
+| ----------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `anti_cheat.thresholds` | `{"min_human_reaction_ms": 150, "max_human_reaction_ms": 30000}` | Anti-cheat reaction-time window. Tunable via `PATCH /admin/config/:key`. |
 
 ## audit_log

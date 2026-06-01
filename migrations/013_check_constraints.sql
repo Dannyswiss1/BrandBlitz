@@ -6,7 +6,7 @@
 ALTER TABLE challenges
   ADD CONSTRAINT challenges_pool_amount_positive
     CHECK (
-      status IN ('pending_deposit', 'cancelled')
+      status IN ('pending_deposit', 'cancelled', 'refunded')
       OR pool_amount_stroops > 0
     );
 

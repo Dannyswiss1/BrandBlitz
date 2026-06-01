@@ -93,10 +93,12 @@ describeIntegration("challenges db queries", () => {
         payout_tx_hashes TEXT[],
         max_players INTEGER,
         starts_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        ends_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+        ends_at             TIMESTAMPTZ,
+        deleted_at          TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        `);
+
     await query(
       `CREATE INDEX idx_challenges_deposit_memo ON challenges (deposit_memo)`
     );

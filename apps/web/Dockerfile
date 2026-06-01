@@ -1,4 +1,4 @@
-FROM node:22-alpine AS base
+FROM node:22.14.0-alpine AS base
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
 # ── deps ──────────────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
 # ── runner ────────────────────────────────────────────────────────────────────
-FROM node:22-alpine AS runner
+FROM node:22.14.0-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -51,6 +51,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/
 USER nextjs
 
 EXPOSE 3000
+STOPSIGNAL SIGTERM
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 

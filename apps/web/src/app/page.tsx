@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
-import { formatUsdc } from "@/lib/utils";
+import { formatUsdc } from "@/lib/format";
 import type { Challenge } from "@/lib/api";
 
 async function getActiveChallenges(): Promise<{ challenges: Challenge[]; failed: boolean }> {

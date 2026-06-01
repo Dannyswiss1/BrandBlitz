@@ -14,6 +14,8 @@
 
 import type { Event, EventHint } from "@sentry/node";
 
+import { config } from "./config";
+
 // Fields in request bodies that must never appear in Sentry events.
 const SCRUBBED_BODY_KEYS = new Set([
   "password",
@@ -73,7 +75,7 @@ async function getSentry(): Promise<typeof import("@sentry/node") | undefined> {
  * Safe to call multiple times — subsequent calls are ignored by Sentry.
  */
 export async function initSentry(): Promise<void> {
-  const dsn = process.env.SENTRY_DSN;
+  const dsn = config.SENTRY_DSN;
   if (!dsn) return; // off by default in dev
 
   const Sentry = await getSentry();
@@ -81,7 +83,7 @@ export async function initSentry(): Promise<void> {
 
   Sentry.init({
     dsn,
-    environment: process.env.NODE_ENV ?? "development",
+    environment: config.NODE_ENV,
     // Source maps are uploaded by CI; do not send raw source here.
     includeLocalVariables: false,
     beforeSend: buildBeforeSend,

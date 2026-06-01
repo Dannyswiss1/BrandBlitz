@@ -2,17 +2,23 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { createApiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatUsdc } from "@/lib/utils";
+import { formatUsdc } from "@/lib/format";
 import type { LeaderboardEntry } from "@/lib/api";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LiveChallengeLeaderboard } from "@/components/leaderboard/live-challenge-leaderboard";
 import { toast } from "@/lib/toast";
+
+interface DepositInfo {
+  hotWalletAddress: string;
+  memo: string;
+  amount: string;
+}
 
 function normalizeBrand(brand: any) {
   if (!brand) return null;
@@ -39,15 +45,12 @@ export default function BrandAnalyticsPage() {
   const { data: session, status } = useSession();
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const apiToken = (session as { apiToken?: string } | null)?.apiToken;
   const brandId = params.id as string;
-  const depositAddress = searchParams.get("depositAddress");
-  const depositMemo = searchParams.get("memo");
-  const depositAmount = searchParams.get("amount");
 
   const [brand, setBrand] = useState<any>(null);
   const [challenge, setChallenge] = useState<any>(null);
+  const [depositInfo, setDepositInfo] = useState<DepositInfo | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [brandLoadError, setBrandLoadError] = useState(false);
@@ -90,6 +93,19 @@ export default function BrandAnalyticsPage() {
     const latestChallenge = normalizeChallenge(challengeResult.value.data.challenges[0]);
     setChallenge(latestChallenge ?? null);
 
+    // Fetch deposit info if challenge exists and is pending deposit
+    if (latestChallenge && latestChallenge.status === "pending_deposit") {
+      try {
+        const depositRes = await api.get(`/challenges/${latestChallenge.id}/deposit-info`);
+        setDepositInfo(depositRes.data.depositInfo);
+      } catch (err) {
+        // Silently fail if deposit info is not available
+        setDepositInfo(null);
+      }
+    } else {
+      setDepositInfo(null);
+    }
+
     if (!latestChallenge) {
       setLeaderboard([]);
       setLoading(false);
@@ -119,11 +135,7 @@ export default function BrandAnalyticsPage() {
   }, [apiToken, status, router, brandId]);
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-pulse text-[var(--muted-foreground)]">Loading...</div>
-      </div>
-    );
+    return null;
   }
 
   if (!brand) {
@@ -177,7 +189,7 @@ export default function BrandAnalyticsPage() {
 
       {challenge && (
         <>
-          {depositAddress && depositMemo ? (
+          {depositInfo ? (
             <Card className="mb-8 border-amber-300 bg-amber-50">
               <CardHeader>
                 <CardTitle>Deposit Instructions</CardTitle>
@@ -185,9 +197,9 @@ export default function BrandAnalyticsPage() {
               <CardContent className="space-y-3 text-sm">
                 <p>Fund this challenge to activate it on-chain.</p>
                 <div className="space-y-1 font-mono text-xs text-slate-700">
-                  <p>Address: {depositAddress}</p>
-                  <p>Memo: {depositMemo}</p>
-                  {depositAmount ? <p>Amount: {depositAmount} USDC</p> : null}
+                  <p>Address: {depositInfo.hotWalletAddress}</p>
+                  <p>Memo: {depositInfo.memo}</p>
+                  {depositInfo.amount ? <p>Amount: {depositInfo.amount} USDC</p> : null}
                 </div>
               </CardContent>
             </Card>

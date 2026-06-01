@@ -85,38 +85,7 @@ describe("ChallengeRound", () => {
     expect(onAnswer).toHaveBeenCalledWith("A", expect.any(Number));
   });
 
-  it("submits null on timer expiry", () => {
-    const onAnswer = vi.fn();
-
-    render(
-      <ChallengeRound
-        question={{
-          id: "q1",
-          challenge_id: "c1",
-          round: 1,
-          question_type: "mcq",
-          prompt_type: "logo",
-          question_text: "Pick the correct brand",
-          option_a: "A option",
-          option_b: "B option",
-          option_c: "C option",
-          option_d: "D option",
-        }}
-        round={1}
-        onAnswer={onAnswer}
-      />
-    );
-
-    act(() => {
-      vi.advanceTimersByTime(15_100);
-    });
-
-    expect(onAnswer).toHaveBeenCalledTimes(1);
-    expect(onAnswer).toHaveBeenCalledWith(null, 15_000);
-    expect(onAnswer).not.toHaveBeenCalledWith("A", expect.any(Number));
-  });
-
-  it("timer reaching 0 calls onAnswer with null and rtMs = ROUND_SECONDS * 1000", () => {
+  it("timer reaching 0 calls onAnswer with null option and rtMs = ROUND_SECONDS * 1000", () => {
     const onAnswer = vi.fn();
     render(<ChallengeRound question={buildQuestion()} round={1} onAnswer={onAnswer} />);
 
@@ -214,5 +183,62 @@ describe("ChallengeRound", () => {
   describe("keyboard navigation", () => {
     it.todo("number keys 1-4 select options (keyboard parity)");
     it.todo("arrow keys navigate between options");
+  });
+
+  // ── #154 — answer-submission error UX ────────────────────────────────────
+
+  describe("answer-error surfacing (#154)", () => {
+    it("renders the inline error banner when answerError is set", () => {
+      render(
+        <ChallengeRound
+          question={buildQuestion()}
+          round={1}
+          onAnswer={vi.fn()}
+          answerError="network blip"
+        />,
+      );
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByText(/network blip/i)).toBeInTheDocument();
+    });
+
+    it("does not render the banner when answerError is null/undefined", () => {
+      const { rerender } = render(
+        <ChallengeRound question={buildQuestion()} round={1} onAnswer={vi.fn()} answerError={null} />,
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      rerender(
+        <ChallengeRound question={buildQuestion()} round={1} onAnswer={vi.fn()} />,
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("invokes onRetry when the Retry button is clicked", () => {
+      const onRetry = vi.fn();
+      render(
+        <ChallengeRound
+          question={buildQuestion()}
+          round={1}
+          onAnswer={vi.fn()}
+          answerError="server 500"
+          onRetry={onRetry}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it("omits the Retry button when onRetry is not supplied", () => {
+      render(
+        <ChallengeRound
+          question={buildQuestion()}
+          round={1}
+          onAnswer={vi.fn()}
+          answerError="permanent failure"
+        />,
+      );
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    });
   });
 });

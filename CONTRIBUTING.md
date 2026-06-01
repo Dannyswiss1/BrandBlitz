@@ -13,6 +13,7 @@ Thank you for contributing to BrandBlitz — the skill-validated attention marke
 - [Code Review Expectations](#code-review-expectations)
 - [Drips Wave 4 Rules](#drips-wave-4-rules)
 - [Issue Templates](#issue-templates)
+- [Operations Runbooks](#operations-runbooks)
 - [Getting Started](#getting-started)
 
 ---
@@ -189,9 +190,9 @@ Maintainers may merge with a single approval for documentation-only changes.
 
 ---
 
-## Drips Wave 4 Rules
+## Drips Wave Participation Rules
 
-BrandBlitz is built as part of [Drips Wave 4](https://drips.network). The following rules apply to all Drips Wave contributions in this repository:
+BrandBlitz is built as part of the [Drips programme](https://drips.network). The following rules apply to all Drips Wave contributions in this repository:
 
 1. **All Stellar integrations must run on testnet during development.** Set `STELLAR_NETWORK=testnet` in your `.env`. Never commit mainnet credentials.
 2. **Every PR that touches Stellar code must include a testnet transaction hash** in the PR description demonstrating the happy path works end-to-end. Use the `stellar-cli` or Stellar Laboratory to verify.
@@ -199,7 +200,7 @@ BrandBlitz is built as part of [Drips Wave 4](https://drips.network). The follow
 4. **Smart contract changes require a separate PR.** Changes to `contracts/escrow/` must be reviewed by at least two maintainers and include both `cargo test` and `soroban-cli` deploy output.
 5. **Batch payouts must not exceed 50 ops per transaction.** The `MAX_OPS_PER_TX = 50` constant in `packages/stellar/src/constants.ts` is a hard limit — Stellar rejects transactions above this.
 6. **Do not change the escrow contract interface without a migration plan.** Breaking changes to `settle()` or `refund()` affect live brand deposits.
-7. **Drips Wave submission deadline.** All PRs intended for the Wave 4 submission must be merged to `main` before the freeze date communicated in the project Discord. PRs open after the freeze are queued for Wave 5.
+7. **Drips Wave submission deadline.** All PRs intended for the current Wave submission must be merged to `main` before the freeze date communicated in the project Discord. PRs open after the freeze are automatically queued for the next Wave.
 
 ---
 
@@ -216,6 +217,15 @@ Use the appropriate issue template when opening a new issue (see issue [#60](../
 | **Chore / maintenance** | Dependency upgrades, tooling changes, CI fixes |
 
 If no template fits, open a blank issue with at minimum: context, expected behaviour, and actual behaviour.
+
+---
+
+## Operations Runbooks
+
+When you introduce a new failure mode (new queue, new external dependency, new background job), add a runbook in [`docs/runbooks/`](./docs/runbooks/README.md) following the template in the index.
+
+Runbooks cover: symptom → impact → diagnosis → mitigation → remediation.
+Link your new runbook from the `docs/runbooks/README.md` index.
 
 ---
 
@@ -236,6 +246,12 @@ cp .env.example .env
 
 # 4. Start infrastructure
 docker compose up postgres redis minio minio-setup
+
+# 4b. (Optional) Seed the database with fixture data — 50 users, 3 brands, 6 challenges, 200 sessions
+pnpm --filter @brandblitz/api seed
+# Re-run with --reset to wipe and re-seed from scratch:
+# pnpm --filter @brandblitz/api seed -- --reset
+# Or use SEED_DEV=1 to auto-seed on docker compose up (see docker-compose.override.yml)
 
 # 5. Start all apps (Turborepo parallel)
 pnpm dev

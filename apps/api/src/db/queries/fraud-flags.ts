@@ -6,7 +6,23 @@ export interface FraudFlag {
   user_id: string;
   flag_type: string;
   details: Record<string, unknown> | null;
+  status: "open" | "resolved" | "escalated";
+  resolution_reason: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface FraudFlagDetail extends FraudFlag {
+  user_display_name: string;
+  user_email: string;
+  challenge_id: string;
+  round_1_reaction_ms: number | null;
+  round_2_reaction_ms: number | null;
+  round_3_reaction_ms: number | null;
+  session_flag_reasons: string[] | null;
+  device_id: string | null;
 }
 
 export async function createFraudFlag(data: {
@@ -24,4 +40,121 @@ export async function createFraudFlag(data: {
        created_at = EXCLUDED.created_at`,
     [data.sessionId, data.userId, data.flagType, data.details ?? null]
   );
+}
+
+export async function getFraudFlags(opts: {
+  status?: string;
+  page: number;
+  pageSize: number;
+}): Promise<{ flags: FraudFlagDetail[]; total: number }> {
+  const offset = (opts.page - 1) * opts.pageSize;
+  const statusParam = opts.status ?? null;
+
+  const [rowsResult, countResult] = await Promise.all([
+    query<FraudFlagDetail>(
+      `SELECT
+         ff.id,
+         ff.session_id,
+         ff.user_id,
+         ff.flag_type,
+         ff.details,
+         ff.status,
+         ff.resolution_reason,
+         ff.resolved_by,
+         ff.resolved_at,
+         ff.created_at,
+         ff.updated_at,
+         u.display_name  AS user_display_name,
+         u.email         AS user_email,
+         gs.challenge_id,
+         gs.round_1_reaction_ms,
+         gs.round_2_reaction_ms,
+         gs.round_3_reaction_ms,
+         gs.flag_reasons AS session_flag_reasons,
+         gs.device_id
+       FROM fraud_flags ff
+       JOIN users        u  ON ff.user_id    = u.id
+       JOIN game_sessions gs ON ff.session_id = gs.id
+       WHERE ($1::text IS NULL OR ff.status = $1)
+       ORDER BY ff.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [statusParam, opts.pageSize, offset]
+    ),
+    query<{ count: string }>(
+      `SELECT COUNT(*) AS count
+       FROM fraud_flags
+       WHERE ($1::text IS NULL OR status = $1)`,
+      [statusParam]
+    ),
+  ]);
+
+  return {
+    flags: rowsResult.rows,
+    total: parseInt(countResult.rows[0]?.count ?? "0", 10),
+  };
+}
+
+export async function getFraudFlagById(id: string): Promise<FraudFlagDetail | null> {
+  const result = await query<FraudFlagDetail>(
+    `SELECT
+       ff.id,
+       ff.session_id,
+       ff.user_id,
+       ff.flag_type,
+       ff.details,
+       ff.status,
+       ff.resolution_reason,
+       ff.resolved_by,
+       ff.resolved_at,
+       ff.created_at,
+       ff.updated_at,
+       u.display_name  AS user_display_name,
+       u.email         AS user_email,
+       gs.challenge_id,
+       gs.round_1_reaction_ms,
+       gs.round_2_reaction_ms,
+       gs.round_3_reaction_ms,
+       gs.flag_reasons AS session_flag_reasons,
+       gs.device_id
+     FROM fraud_flags ff
+     JOIN users        u  ON ff.user_id    = u.id
+     JOIN game_sessions gs ON ff.session_id = gs.id
+     WHERE ff.id = $1`,
+    [id]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function updateFraudFlagStatus(
+  id: string,
+  status: "resolved" | "escalated",
+  reason: string,
+  resolvedById: string
+): Promise<FraudFlagDetail | null> {
+  const before = await getFraudFlagById(id);
+  if (!before) return null;
+
+  await query(
+    `UPDATE fraud_flags
+     SET status            = $1,
+         resolution_reason = $2,
+         resolved_by       = $3,
+         resolved_at       = NOW(),
+         updated_at        = NOW()
+     WHERE id = $4`,
+    [status, reason, resolvedById, id]
+  );
+
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity, entity_key, before, after)
+     VALUES ($1, 'update', 'fraud_flags', $2, $3, $4)`,
+    [
+      resolvedById,
+      id,
+      { status: before.status, resolution_reason: before.resolution_reason },
+      { status, resolution_reason: reason },
+    ]
+  );
+
+  return getFraudFlagById(id);
 }

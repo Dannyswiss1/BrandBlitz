@@ -55,7 +55,12 @@ describeIntegration("sessions db queries", () => {
       CREATE TABLE users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email TEXT NOT NULL UNIQUE,
-        avatar_url TEXT
+        avatar_url TEXT,
+        display_name TEXT,
+        league TEXT,
+        total_earned_usdc NUMERIC(20, 7) NOT NULL DEFAULT 0,
+        stellar_address TEXT,
+        deleted_at TIMESTAMPTZ
       )
     `);
     await query(`

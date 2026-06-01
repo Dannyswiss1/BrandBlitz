@@ -36,11 +36,18 @@ vi.mock("../middleware/rate-limit", () => ({
 vi.mock("../lib/integrity", () => ({
   computeSessionHmac: vi.fn().mockReturnValue("test-hmac"),
 }));
+vi.mock("@brandblitz/stellar", () => ({
+  WARMUP_MIN_SECONDS: 20,
+}));
+vi.mock("../services/streaks", () => ({
+  updateStreak: vi.fn(),
+}));
 
 import * as challengeQueries from "../db/queries/challenges";
 import * as sessionQueries from "../db/queries/sessions";
 import { redis } from "../lib/redis";
 import * as scoringService from "../services/scoring";
+import { updateStreak } from "../services/streaks";
 
 const app = express();
 app.use(express.json());
@@ -57,9 +64,7 @@ describe("Sessions API", () => {
       (challengeQueries.getChallengeById as any).mockResolvedValue({ id: "c1", status: "active" });
       (sessionQueries.createSession as any).mockResolvedValue({ id: "s1" });
 
-      const res = await request(app)
-        .post("/sessions/c1/warmup-start")
-        .send({ isPractice: false });
+      const res = await request(app).post("/sessions/c1/warmup-start").send({ isPractice: false });
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty("sessionId", "s1");
@@ -185,6 +190,7 @@ describe("Sessions API", () => {
       ]);
       (sessionQueries.finishSession as any).mockResolvedValue({
         id: "s1",
+        user_id: "user123",
         total_score: 300,
         completed_at: new Date().toISOString(),
       });
@@ -196,6 +202,7 @@ describe("Sessions API", () => {
       expect(res.status).toBe(200);
       expect(sessionQueries.finishSession).toHaveBeenCalledWith("s1");
       expect(sessionQueries.storeSessionHmac).toHaveBeenCalledWith("s1", "test-hmac");
+      expect(updateStreak).toHaveBeenCalledWith("user123");
     });
 
     it("should 409 if session already completed on round 1", async () => {

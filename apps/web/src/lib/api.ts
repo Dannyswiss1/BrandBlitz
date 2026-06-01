@@ -1,6 +1,39 @@
 import { z } from "zod";
 import axios from "axios";
-import type { AxiosInstance } from "axios";
+import type { AxiosError, AxiosInstance } from "axios";
+
+declare module "axios" {
+  export interface AxiosRequestConfig {
+    skipErrorToast?: boolean;
+  }
+}
+
+function errorMessageFromResponse(error: AxiosError): string {
+  const data = error.response?.data;
+
+  if (data && typeof data === "object") {
+    const body = data as Record<string, unknown>;
+    if (typeof body.message === "string" && body.message.trim()) {
+      return body.message;
+    }
+    if (typeof body.error === "string" && body.error.trim()) {
+      return body.error;
+    }
+  }
+
+  return "Something went wrong. Please try again.";
+}
+
+async function showApiErrorToast(error: AxiosError): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (error.config?.skipErrorToast) return;
+
+  const status = error.response?.status;
+  if (!status || status < 400 || status > 599) return;
+
+  const { toast } = await import("./toast");
+  toast.error(errorMessageFromResponse(error));
+}
 
 let BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -24,12 +57,34 @@ try {
 }
 
 export function createApiClient(token?: string): AxiosInstance {
-  return axios.create({
+  const client = axios.create({
     baseURL: BASE_URL,
     withCredentials: true,
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     timeout: 10_000,
   });
+
+  client.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      if (axios.isAxiosError(error)) {
+        await showApiErrorToast(error);
+
+        if (
+          token &&
+          typeof window !== "undefined" &&
+          error.response?.status === 401 &&
+          !error.config?.url?.startsWith("/auth/")
+        ) {
+          const { signOut } = await import("next-auth/react");
+          await signOut({ callbackUrl: "/login" });
+        }
+      }
+      return Promise.reject(error);
+    }
+  );
+
+  return client;
 }
 
 // Unauthenticated client for public endpoints
@@ -42,7 +97,14 @@ export interface Challenge {
   challenge_id: string;
   pool_amount_stroops: string;
   pool_amount_usdc: string;
-  status: "pending_deposit" | "active" | "ended" | "settled" | "payout_failed";
+  status:
+    | "pending_deposit"
+    | "active"
+    | "ended"
+    | "settled"
+    | "payout_failed"
+    | "cancelled"
+    | "refunded";
   starts_at: string;
   ends_at: string | null;
   // joined fields
@@ -79,7 +141,24 @@ export interface LeaderboardEntry {
   endedAt: string | null;
 }
 
+const LeaderboardEntrySchema = z.object({
+  rank: z.number(),
+  userId: z.string().optional(),
+  username: z.string(),
+  displayName: z.string().optional(),
+  league: z.enum(["bronze", "silver", "gold"]).nullable().optional(),
+  avatarUrl: z.string().nullable(),
+  totalScore: z.number(),
+  totalEarned: z.string().optional(),
+  endedAt: z.string().nullable(),
+});
+
+export function parseLeaderboardEntries(data: unknown): LeaderboardEntry[] {
+  return z.array(LeaderboardEntrySchema).parse(data);
+}
+
 export interface UserProfile {
+  userId?: string;
   displayName: string;
   username: string;
   league: "bronze" | "silver" | "gold" | null;
@@ -99,6 +178,8 @@ export interface UserProfile {
 
 export interface StreakResponse {
   streak: number;
+  lastPlayDay?: string | null;
+  repairAvailable?: boolean;
   nextMilestone: number;
   progress: number;
   milestoneJustHit: boolean;

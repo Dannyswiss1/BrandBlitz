@@ -1,0 +1,34 @@
+name: "🔥 High Complexity (Drips Wave)"
+description: Major feature implementations, architectural changes, or complex integrations.
+labels: ["high", "drips-wave"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for contributing! High complexity tasks are significant efforts that often touch multiple parts of the system and require thorough design and testing.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Detailed explanation of the architectural change or major feature.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What must be true for this to be considered "done"?
+    validations:
+      required: true
+  - type: textarea
+    id: relevant-files
+    attributes:
+      label: Relevant Files
+      description: Which files or directories are involved in this change?
+      placeholder: "e.g., apps/api/src/services/payout.ts, packages/stellar/src/payout.ts"
+  - type: textarea
+    id: resources
+    attributes:
+      label: Resources
+      description: Links to documentation, Figma, related issues, or other resources.
+      placeholder: "e.g., https://github.com/BrandBlitz/brandblitz/docs/stellar-architecture.md"

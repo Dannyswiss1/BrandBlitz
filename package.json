@@ -12,6 +12,7 @@
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "lint": "turbo run lint",
     "type-check": "turbo run type-check",
+    "validate-env-example": "tsx scripts/validate-env-example.ts",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\" --ignore-path .gitignore",
     "docs:db": "GOBIN=$HOME/go/bin go install github.com/k1LoW/tbls@latest && PATH=$HOME/go/bin:$PATH mkdir -p /tmp/brandblitz-tbls-docs && rm -rf /tmp/brandblitz-tbls-docs && PATH=$HOME/go/bin:$PATH tbls doc \"${DATABASE_URL:-postgresql://brandblitz:brandblitz_dev@127.0.0.1:5432/brandblitz?sslmode=disable}\" /tmp/brandblitz-tbls-docs --er-format svg --force && mkdir -p docs/db && cp /tmp/brandblitz-tbls-docs/schema.svg docs/db/er.svg",
@@ -20,6 +21,7 @@
     "gitleaks:pre-commit": "git diff --cached --no-color | node scripts/gitleaks.mjs detect --pipe --redact --config .gitleaks.toml"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
     "@playwright/test": "1.51.1",
     "@vitest/coverage-v8": "4.1.2",
     "eslint": "10.1.0",

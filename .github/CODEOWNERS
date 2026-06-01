@@ -1,0 +1,7 @@
+# Default owner for the repository
+* @devonahi
+
+# Backend owners
+/apps/api/ @devonahi
+/packages/ @devonahi
+/contracts/ @devonahi

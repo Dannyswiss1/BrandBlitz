@@ -21,6 +21,7 @@ import { createError } from "../middleware/error";
 import { challengeStartLimiter } from "../middleware/rate-limit";
 import { redis } from "../lib/redis";
 import { computeSessionHmac } from "../lib/integrity";
+import { updateStreak } from "../services/streaks";
 import { WARMUP_MIN_SECONDS } from "@brandblitz/stellar";
 
 const router = Router();
@@ -128,83 +129,77 @@ router.post(
  * Correct answers are NEVER sent to the client.
  * Round-3 is idempotent: duplicate requests return the cached result.
  */
-router.post(
-  "/:challengeId/answer/:round",
-  authenticate,
-  validateReactionTime,
-  async (req, res) => {
-    const round = parseInt(req.params.round) as 1 | 2 | 3;
-    if (![1, 2, 3].includes(round)) throw createError("Invalid round", 400);
+router.post("/:challengeId/answer/:round", authenticate, validateReactionTime, async (req, res) => {
+  const round = parseInt(req.params.round) as 1 | 2 | 3;
+  if (![1, 2, 3].includes(round)) throw createError("Invalid round", 400);
 
-    const body = AnswerSchema.parse(req.body);
-    const challenge = await getChallengeById(req.params.challengeId);
-    if (!challenge) throw createError("Challenge not found", 404);
+  const body = AnswerSchema.parse(req.body);
+  const challenge = await getChallengeById(req.params.challengeId);
+  if (!challenge) throw createError("Challenge not found", 404);
 
-    const session = await getSession(req.user!.sub, challenge.id);
-    if (!session) throw createError("Session not found", 404);
-    if (session.user_id !== req.user!.sub) throw createError("Forbidden", 403);
-    if (!session.challenge_started_at) throw createError("Challenge not started", 400);
+  const session = await getSession(req.user!.sub, challenge.id);
+  if (!session) throw createError("Session not found", 404);
+  if (session.user_id !== req.user!.sub) throw createError("Forbidden", 403);
+  if (!session.challenge_started_at) throw createError("Challenge not started", 400);
 
-    // For non-round-3, a completed session is always a hard stop
-    if (session.completed_at && round !== 3) {
-      throw createError("Session already completed", 409);
+  // For non-round-3, a completed session is always a hard stop
+  if (session.completed_at && round !== 3) {
+    throw createError("Session already completed", 409);
+  }
+  if (session.is_flagged) throw createError("Session flagged for review", 403);
+
+  // Double answer check
+  const existingScores = (session as any).scores || [];
+  if (existingScores.some((s: any) => s.round === round)) {
+    throw createError("Round already answered", 400);
+  }
+
+  // Get the server-stored question for this round
+  const questions = await getChallengeQuestions(challenge.id);
+  const question = questions.find((q) => q.round === round);
+  if (!question) throw createError("Question not found", 404);
+
+  // Idempotent round-3 replay: return cached result if answer matches; reject if it differs
+  if (session.completed_at && round === 3) {
+    if (session.round_3_answer !== body.selectedOption) {
+      throw createError("Answer conflict detected", 409, "CONFLICT_REPLAY");
     }
-    if (session.is_flagged) throw createError("Session flagged for review", 403);
-
-    // Double answer check
-    const existingScores = (session as any).scores || [];
-    if (existingScores.some((s: any) => s.round === round)) {
-      throw createError("Round already answered", 400);
-    }
-
-    // Get the server-stored question for this round
-    const questions = await getChallengeQuestions(challenge.id);
-    const question = questions.find((q) => q.round === round);
-    if (!question) throw createError("Question not found", 404);
-
-    // Idempotent round-3 replay: return cached result if answer matches; reject if it differs
-    if (session.completed_at && round === 3) {
-      if (session.round_3_answer !== body.selectedOption) {
-        throw createError("Answer conflict detected", 409, "CONFLICT_REPLAY");
-      }
-      return res.json({
-        correct: validateAnswer(question, body.selectedOption),
-        score: session.round_3_score,
-        round: 3,
-        total_score: session.total_score,
-        rank: session.rank ?? null,
-      });
-    }
-
-    const score = calculateRoundScore({
-      selectedOption: body.selectedOption,
-      correctOption: question.correct_option,
-      reactionTimeMs: body.reactionTimeMs,
-    });
-
-    await recordRoundScore(session.id, round, score, body.selectedOption, body.reactionTimeMs);
-
-    // On last round — finalize the session and stamp an integrity HMAC
-    if (round === 3) {
-      const completed = await finishSession(session.id);
-      if (completed) {
-        const hmac = computeSessionHmac(
-          completed.id,
-          completed.total_score,
-          completed.completed_at!
-        );
-        if (hmac) {
-          await storeSessionHmac(session.id, hmac);
-        }
-      }
-    }
-
-    res.json({
+    return res.json({
       correct: validateAnswer(question, body.selectedOption),
-      score,
-      round,
+      score: session.round_3_score,
+      round: 3,
+      total_score: session.total_score,
+      rank: session.rank ?? null,
     });
   }
-);
+
+  const score = calculateRoundScore({
+    selectedOption: body.selectedOption,
+    correctOption: question.correct_option,
+    reactionTimeMs: body.reactionTimeMs,
+  });
+
+  await recordRoundScore(session.id, round, score, body.selectedOption, body.reactionTimeMs);
+
+  // On last round — finalize the session and stamp an integrity HMAC
+  if (round === 3) {
+    const completed = await finishSession(session.id);
+    if (completed) {
+      const hmac = computeSessionHmac(completed.id, completed.total_score, completed.completed_at!);
+      if (hmac) {
+        await storeSessionHmac(session.id, hmac);
+      }
+      if (!completed.is_practice) {
+        await updateStreak(completed.user_id);
+      }
+    }
+  }
+
+  res.json({
+    correct: validateAnswer(question, body.selectedOption),
+    score,
+    round,
+  });
+});
 
 export default router;

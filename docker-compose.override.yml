@@ -18,7 +18,15 @@ services:
   api:
     build:
       target: dev
-    command: ["pnpm", "--filter", "@brandblitz/api", "dev"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        pnpm --filter @brandblitz/api migrate
+        if [ "$$SEED_DEV" = "1" ]; then
+          pnpm --filter @brandblitz/api seed
+        fi
+        exec pnpm --filter @brandblitz/api dev
     volumes:
       - ./apps/api/src:/app/apps/api/src:ro
       - ./packages:/app/packages:ro
@@ -27,6 +35,7 @@ services:
     environment:
       NODE_ENV: development
       E2E_MOCK_GOOGLE_OAUTH: ${E2E_MOCK_GOOGLE_OAUTH:-true}
+      SEED_DEV: ${SEED_DEV:-0}
 
   worker:
     build:

@@ -22,7 +22,7 @@ export async function ensureAssignmentForUserThisWeek(
     WITH user_league AS (
       SELECT COALESCE(league, 'bronze')::text AS league
       FROM users
-      WHERE id = $1
+      WHERE id = $1 AND deleted_at IS NULL
     ),
     existing AS (
       SELECT league, group_id
@@ -116,6 +116,7 @@ export async function getCurrentLeagueGroup(
       ROW_NUMBER() OVER (ORDER BY s.weekly_points DESC, s.user_id ASC) AS rank_in_group
     FROM scoped s
     JOIN users u ON u.id = s.user_id
+    WHERE u.deleted_at IS NULL
     ORDER BY s.weekly_points DESC, s.user_id ASC
     LIMIT 30
     `,
@@ -206,6 +207,7 @@ export async function seedWeekAssignments(weekStart: string): Promise<void> {
         END AS league
       FROM users u
       LEFT JOIN prev p ON p.user_id = u.id
+      WHERE u.deleted_at IS NULL
     ),
     numbered AS (
       SELECT

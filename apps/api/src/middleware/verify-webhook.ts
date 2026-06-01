@@ -15,7 +15,12 @@ export function signWebhookPayload(payload: string | Buffer, timestamp: number):
 
 export async function verifyWebhook(req: Request, res: Response, next: NextFunction): Promise<void> {
   const secret = req.headers["x-webhook-secret"];
-  if (typeof secret !== "string" || secret !== config.WEBHOOK_SECRET) {
+  const secretBuf = Buffer.from(typeof secret === "string" ? secret : "");
+  const expectedSecretBuf = Buffer.from(config.WEBHOOK_SECRET);
+  if (
+    secretBuf.length !== expectedSecretBuf.length ||
+    !crypto.timingSafeEqual(secretBuf, expectedSecretBuf)
+  ) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }

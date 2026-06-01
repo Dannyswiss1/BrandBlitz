@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatScore, formatUsdc } from "@/lib/utils";
+import { formatScore, formatUsdc } from "@/lib/format";
 
 interface ResultScreenProps {
   totalScore: number;

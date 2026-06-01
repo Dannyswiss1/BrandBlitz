@@ -2,11 +2,9 @@ import { Worker, type Job, type WorkerOptions } from "bullmq";
 import { redis } from "../../lib/redis";
 import { processPayout } from "../../services/payout";
 import { logger } from "../../lib/logger";
+import { config } from "../../lib/config";
 
-export const PAYOUT_WORKER_CONCURRENCY = parseInt(
-  process.env.PAYOUT_WORKER_CONCURRENCY ?? "2",
-  10
-);
+export const PAYOUT_WORKER_CONCURRENCY = config.PAYOUT_WORKER_CONCURRENCY;
 
 export const payoutWorkerOptions = {
   connection: redis,

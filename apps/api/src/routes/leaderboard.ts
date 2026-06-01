@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { getActiveChallenges } from "../db/queries/challenges";
 import { getLeaderboard, getTopSessionsPerChallenge } from "../db/queries/sessions";
-import { redis } from "../lib/redis";
+import { cached } from "../lib/cache";
 
 const router = Router();
 
@@ -97,38 +97,46 @@ router.get("/stream", async (req, res) => {
  * Cross-challenge leaderboard (cached in Redis, 5 min TTL).
  * Single aggregated query via ROW_NUMBER() — no N+1.
  */
-router.get("/global", async (_req, res) => {
-  const cacheKey = "leaderboard:global";
-  const cached = await redis.get(cacheKey);
+router.get("/global", async (req, res) => {
+  const { limit, offset } = z.object({
+    limit: z.coerce.number().min(1).max(100).default(50),
+    offset: z.coerce.number().min(0).default(0),
+  }).parse(req.query);
 
-  if (cached) {
-    res.json(JSON.parse(cached));
-    return;
-  }
+  const response = await cached(`leaderboard:global:${limit}:${offset}`, 300, async () => {
+    const challenges = await getActiveChallenges(10);
+    const challengeIds = challenges.map((c) => c.id);
+    const topSessions = await getTopSessionsPerChallenge(challengeIds, 10);
 
-  const challenges = await getActiveChallenges(10);
-  const challengeIds = challenges.map((c) => c.id);
-  const topSessions = await getTopSessionsPerChallenge(challengeIds, 10);
+    const rankPerChallenge = new Map<string, number>();
+    const allSessions = topSessions.map((s) => {
+      const rank = (rankPerChallenge.get(s.challenge_id) ?? 0) + 1;
+      rankPerChallenge.set(s.challenge_id, rank);
+      return {
+        rank,
+        challengeId: s.challenge_id,
+        userId: s.user_id,
+        username: s.username,
+        displayName: s.display_name,
+        league: s.league,
+        avatarUrl: s.avatar_url,
+        totalScore: s.total_score,
+        totalEarned: s.total_earned_usdc,
+      };
+    });
 
-  const rankPerChallenge = new Map<string, number>();
-  const allSessions = topSessions.map((s) => {
-    const rank = (rankPerChallenge.get(s.challenge_id) ?? 0) + 1;
-    rankPerChallenge.set(s.challenge_id, rank);
+    const leaderboard = allSessions.slice(offset, offset + limit);
+
     return {
-      rank,
-      challengeId: s.challenge_id,
-      userId: s.user_id,
-      username: s.username,
-      displayName: s.display_name,
-      league: s.league,
-      avatarUrl: s.avatar_url,
-      totalScore: s.total_score,
-      totalEarned: s.total_earned_usdc,
+      leaderboard,
+      cachedAt: new Date().toISOString(),
+      pagination: {
+        limit,
+        offset,
+        hasMore: offset + leaderboard.length < allSessions.length,
+      },
     };
   });
-
-  const response = { leaderboard: allSessions, cachedAt: new Date().toISOString() };
-  await redis.set(cacheKey, JSON.stringify(response), "EX", 300);
 
   res.json(response);
 });

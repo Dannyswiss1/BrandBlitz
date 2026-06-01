@@ -9,7 +9,7 @@ import { createApiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatUsdc } from "@/lib/utils";
+import { formatUsdc } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/lib/toast";
 
@@ -83,11 +83,7 @@ export default function DashboardPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-pulse text-[var(--muted-foreground)]">Loading dashboard...</div>
-      </div>
-    );
+    return null;
   }
 
   return (

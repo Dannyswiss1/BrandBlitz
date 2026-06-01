@@ -9,7 +9,8 @@ import express from "express";
 // Mocks MUST be hoisted to run before imports
 vi.mock("@brandblitz/storage", () => ({
   optimizeImage: vi.fn().mockResolvedValue("optimized.webp"),
-  getPublicUrl: (bucket: string, key: string) => `https://storage.example.com/${bucket}/${key}`,
+  getPublicUrl: (bucket: string, key: string) =>
+    `https://storage.example.com/${bucket}/${key}`,
   BUCKETS: {
     BRAND_ASSETS: "brand-assets",
   },
@@ -35,7 +36,8 @@ const JWT_SECRET = "dummy_jwt_secret_for_testing_purposes_only";
 
 vi.hoisted(() => {
   process.env.JWT_SECRET = "dummy_jwt_secret_for_testing_purposes_only";
-  process.env.DATABASE_URL = process.env.DATABASE_URL || "postgresql://user:pass@localhost:5432/db";
+  process.env.DATABASE_URL =
+    process.env.DATABASE_URL || "postgresql://user:pass@localhost:5432/db";
   process.env.REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
   process.env.GOOGLE_CLIENT_ID = "dummy_id";
   process.env.GOOGLE_CLIENT_SECRET = "dummy_secret";
@@ -43,8 +45,8 @@ vi.hoisted(() => {
   process.env.HOT_WALLET_PUBLIC_KEY = "G_DUMMY_PUBLIC_KEY_FOR_TESTING";
   process.env.WEBHOOK_SECRET = "dummy_webhook_secret";
   process.env.S3_ENDPOINT = "http://localhost:9000";
-  process.env.S3_ACCESS_KEY = "dummy_access";
-  process.env.S3_SECRET_KEY = "dummy_secret";
+  process.env.S3_ACCESS_KEY_ID = "dummy_access";
+  process.env.S3_SECRET_ACCESS_KEY = "dummy_secret";
   process.env.S3_PUBLIC_URL = "http://localhost:9000";
 
   // Setup search_path in DATABASE_URL
@@ -56,7 +58,9 @@ vi.hoisted(() => {
     const searchPathOption = `-c search_path=${searchPath}`;
     url.searchParams.set(
       "options",
-      existingOptions ? `${existingOptions} ${searchPathOption}` : searchPathOption
+      existingOptions
+        ? `${existingOptions} ${searchPathOption}`
+        : searchPathOption,
     );
     process.env.DATABASE_URL = url.toString();
     (globalThis as any).__TEST_SCHEMA_NAME__ = searchPath;
@@ -82,7 +86,7 @@ describe("Brands Routes Integration", () => {
     try {
       // 1. Create Schema
       await query(`CREATE SCHEMA IF NOT EXISTS ${actualSchemaName}`);
-      
+
       // 2. Initialize Tables (using root init.sql)
       const initSqlPath = path.resolve(__dirname, "../../../../../init.sql");
       const initSql = readFileSync(initSqlPath, "utf8");
@@ -93,7 +97,7 @@ describe("Brands Routes Integration", () => {
       const email = `brand-owner-${randomUUID().slice(0, 8)}@example.com`;
       await query(
         `INSERT INTO users (id, email, display_name, role) VALUES ($1, $2, $3, $4)`,
-        [userId, email, "Brand Owner", "brand"]
+        [userId, email, "Brand Owner", "brand"],
       );
       testUser = { id: userId, email, token: signToken(userId, email) };
     } catch (error) {
@@ -125,7 +129,7 @@ describe("Brands Routes Integration", () => {
         primaryColor: "#ff0000",
         logoKey: "logo.png",
         productImage1Key: "product-1.png",
-        productImage2Key: "product-2.png"
+        productImage2Key: "product-2.png",
       };
 
       const res = await request(app)
@@ -146,9 +150,14 @@ describe("Brands Routes Integration", () => {
         ],
       });
 
-      const dbRes = await query("SELECT * FROM brands WHERE id = $1", [res.body.brand.id]);
+      const dbRes = await query("SELECT * FROM brands WHERE id = $1 /* include_deleted */", [
+        res.body.brand.id,
+      ]);
       expect(dbRes.rows[0].name).toBe("Acme Corp");
-      expect(dbRes.rows[0].product_image_keys).toEqual(["optimized.webp", "optimized.webp"]);
+      expect(dbRes.rows[0].product_image_keys).toEqual([
+        "optimized.webp",
+        "optimized.webp",
+      ]);
     });
 
     it("returns 400 for invalid payload (missing name)", async () => {
@@ -164,10 +173,10 @@ describe("Brands Routes Integration", () => {
 
   describe("GET /brands", () => {
     it("lists brands owned by user", async () => {
-      await query(
-        `INSERT INTO brands (owner_user_id, name) VALUES ($1, $2)`,
-        [testUser.id, "Second Brand"]
-      );
+      await query(`INSERT INTO brands (owner_user_id, name) VALUES ($1, $2)`, [
+        testUser.id,
+        "Second Brand",
+      ]);
 
       const res = await request(app)
         .get("/brands")
@@ -175,9 +184,15 @@ describe("Brands Routes Integration", () => {
 
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body.brands)).toBe(true);
-      expect(res.body.brands.some((b: any) => b.name === "Acme Corp")).toBe(true);
-      expect(res.body.brands.some((b: any) => b.name === "Second Brand")).toBe(true);
-      expect(res.body.brands.every((b: any) => Array.isArray(b.product_image_urls))).toBe(true);
+      expect(res.body.brands.some((b: any) => b.name === "Acme Corp")).toBe(
+        true,
+      );
+      expect(res.body.brands.some((b: any) => b.name === "Second Brand")).toBe(
+        true,
+      );
+      expect(
+        res.body.brands.every((b: any) => Array.isArray(b.product_image_urls)),
+      ).toBe(true);
     });
   });
 
@@ -185,7 +200,7 @@ describe("Brands Routes Integration", () => {
     it("returns the brand kit for the owner", async () => {
       const brandRes = await query(
         `INSERT INTO brands (owner_user_id, name) VALUES ($1, $2) RETURNING id`,
-        [testUser.id, "Fetch Me"]
+        [testUser.id, "Fetch Me"],
       );
       const brandId = brandRes.rows[0].id;
 
@@ -200,10 +215,13 @@ describe("Brands Routes Integration", () => {
 
     it("returns 403 for non-owner", async () => {
       const otherId = randomUUID();
-      await query(`INSERT INTO users (id, email, display_name) VALUES ($1, $2, $3)`, [otherId, "other2@test.com", "Other"]);
+      await query(
+        `INSERT INTO users (id, email, display_name) VALUES ($1, $2, $3)`,
+        [otherId, "other2@test.com", "Other"],
+      );
       const brandRes = await query(
         `INSERT INTO brands (owner_user_id, name) VALUES ($1, $2) RETURNING id`,
-        [otherId, "Secret Brand"]
+        [otherId, "Secret Brand"],
       );
       const brandId = brandRes.rows[0].id;
 
@@ -227,14 +245,14 @@ describe("Brands Routes Integration", () => {
     it("generates questions and persists them in challenge_questions", async () => {
       const brandRes = await query(
         `INSERT INTO brands (owner_user_id, name, tagline, usp) VALUES ($1, $2, $3, $4) RETURNING id`,
-        [testUser.id, "Challenge Brand", "Top Tagline", "Unique USP"]
+        [testUser.id, "Challenge Brand", "Top Tagline", "Unique USP"],
       );
       const brandId = brandRes.rows[0].id;
 
       const payload = {
         brandId,
         poolAmountUsdc: "100.50",
-        maxPlayers: 50
+        maxPlayers: 50,
       };
 
       const res = await request(app)
@@ -244,12 +262,12 @@ describe("Brands Routes Integration", () => {
 
       expect(res.status).toBe(201);
       expect(res.body.challenge.brand_id).toBe(brandId);
-      
+
       const challengeId = res.body.challenge.id;
 
       const qRes = await query(
         "SELECT * FROM challenge_questions WHERE challenge_id = $1 ORDER BY round",
-        [challengeId]
+        [challengeId],
       );
       expect(qRes.rows.length).toBe(3);
       expect(qRes.rows[0].round).toBe(1);

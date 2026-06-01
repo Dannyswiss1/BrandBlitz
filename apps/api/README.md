@@ -108,6 +108,8 @@ pnpm --filter @brandblitz/api dev:worker
 
 The API listens on `PORT` (default `3001`). In the full Docker stack, Nginx proxies `/api/*` → `http://api:3001/`.
 
+If you are applying schema changes locally, run `pnpm --filter @brandblitz/api migrate`. The dry-run form is `pnpm --filter @brandblitz/api migrate:dryrun`.
+
 ---
 
 ## Environment Variables
@@ -485,6 +487,10 @@ On receipt: validates memo against `challenges` table → transitions status to 
 
 Validates `Authorization: Bearer <jwt>` on every protected route. Adds `req.user: { sub, email }` to the request. An `optionalAuth` variant is available for public routes that behave differently when authenticated.
 
+### `compression`
+
+`compression({ threshold: 1024 })` is mounted early in `src/index.ts` so JSON responses larger than 1 KB are compressed before they leave the API process. Nginx in this repo does not add a second compression layer, so `Vary: Accept-Encoding` is preserved without double-compressing the payload.
+
 ### `rate-limit.ts`
 
 Redis-backed rate limiters using `express-rate-limit`:
@@ -572,7 +578,7 @@ export async function upsertUser(data: UpsertUserData): Promise<User>
 export async function updateUserWallet(userId: string, stellarAddress: string): Promise<void>
 ```
 
-See [`../../init.sql`](../../init.sql) for the full schema with all tables, indices, generated columns, and triggers.
+See [`../../init.sql`](../../init.sql) for the bootstrap entrypoint. The canonical schema snapshot lives in [`./migrations/00000-initial.sql`](./migrations/00000-initial.sql), and `apps/api/migrations/` contains forward migrations plus optional rollback files.
 
 ---
 
@@ -632,6 +638,12 @@ node dist/worker.js
 
 # Type check
 pnpm --filter @brandblitz/api type-check
+
+# Apply pending migrations
+pnpm --filter @brandblitz/api migrate
+
+# Verify there are no pending migrations
+pnpm --filter @brandblitz/api migrate:dryrun
 ```
 
 ### Docker Build

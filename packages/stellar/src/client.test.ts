@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getNetwork, getHorizonServer, getRpcServer, getUsdcAsset } from "./client";
+import { getNetwork, getHorizonServer, getRpcServer, getUsdcAsset, sharedAgent } from "./client";
 import { STELLAR_NETWORKS } from "./constants";
 
 describe("client", () => {
@@ -46,6 +46,16 @@ describe("client", () => {
       const asset = getUsdcAsset("public");
       expect(asset.code).toBe("USDC");
       expect(asset.issuer).toBe(STELLAR_NETWORKS.public.usdcIssuer);
+    });
+  });
+
+  describe("sharedAgent", () => {
+    it("has keepAlive enabled for connection reuse", () => {
+      expect(sharedAgent.keepAlive).toBe(true);
+    });
+
+    it("maxSockets is a positive number", () => {
+      expect(sharedAgent.maxSockets).toBeGreaterThan(0);
     });
   });
 });

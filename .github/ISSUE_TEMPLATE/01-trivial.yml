@@ -1,0 +1,37 @@
+name: "🏗️ Trivial Change (Drips Wave)"
+description: Small fixes, wording changes, or minor styling nits.
+labels: ["trivial", "drips-wave"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for contributing! Trivial changes are small, low-risk improvements that help polish the BrandBlitz codebase.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is this change and why is it needed?
+      placeholder: e.g., "Fix typo in README.md"
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What must be true for this to be considered "done"?
+      placeholder: |
+        - [ ] Typo is corrected
+        - [ ] README still renders correctly
+    validations:
+      required: true
+  - type: textarea
+    id: relevant-files
+    attributes:
+      label: Relevant Files
+      description: Which files or directories are involved in this change?
+      placeholder: "README.md"
+  - type: textarea
+    id: resources
+    attributes:
+      label: Resources
+      description: Links to documentation, Figma, related issues, or other resources.

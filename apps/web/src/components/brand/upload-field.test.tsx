@@ -1,344 +1,220 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { UploadField } from "./upload-field";
+/**
+ * upload-field.test.tsx — Unit tests for client-side file validation in
+ * UploadField (issue #160).
+ *
+ * Covers:
+ *   - Oversized files are rejected before presign is called
+ *   - Wrong MIME type is rejected before presign is called
+ *   - Magic-byte spoofing is rejected before presign is called
+ *   - Valid files proceed to presign
+ *
+ * Closes #160
+ */
 
-// ─── Mocks ─────────────────────────────────────────────────────────────────────
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { UploadField, validateMagicBytes, UPLOAD_TYPE_CONFIGS } from "./upload-field";
 
-const mocks = vi.hoisted(() => ({
-  post: vi.fn(),
-  fetchImpl: vi.fn(),
-  onUploaded: vi.fn(),
-}));
+// ── Mock the API client so no real HTTP calls are made ────────────────────────
+
+const mockPost = vi.fn();
+const mockDelete = vi.fn();
 
 vi.mock("@/lib/api", () => ({
-  createApiClient: () => ({ post: mocks.post }),
+  createApiClient: () => ({
+    post: mockPost,
+    delete: mockDelete,
+  }),
 }));
 
-vi.stubGlobal("fetch", mocks.fetchImpl);
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
-
-function makeFile(name: string, type: string, sizeBytes: number) {
-  return new File([new Uint8Array(sizeBytes)], name, { type });
+/** Build a File with real PNG magic bytes. */
+function makePngFile(sizeBytes: number, name = "test.png"): File {
+  const buf = new Uint8Array(sizeBytes);
+  // PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
+  buf[0] = 0x89; buf[1] = 0x50; buf[2] = 0x4e; buf[3] = 0x47;
+  buf[4] = 0x0d; buf[5] = 0x0a; buf[6] = 0x1a; buf[7] = 0x0a;
+  return new File([buf], name, { type: "image/png" });
 }
 
-function defaultPresignResolve() {
-  mocks.post.mockImplementation(async (url: string) => {
-    if (url === "/upload/presign") {
-      return {
-        data: {
-          presignedUrl: "https://s3.example.com/presigned-url",
-          key: "uploads/test-key.png",
-          publicUrl: "https://cdn.example.com/uploads/test-key.png",
-        },
-      };
-    }
-    if (url === "/upload/verify") {
-      return { data: { ok: true } };
-    }
-    throw new Error(`Unexpected POST to ${url}`);
+/** Build a File that claims to be PNG but has EXE magic bytes (MZ header). */
+function makeSpoofedPngFile(name = "evil.png"): File {
+  const buf = new Uint8Array(12);
+  buf[0] = 0x4d; buf[1] = 0x5a; // MZ — Windows PE header
+  return new File([buf], name, { type: "image/png" });
+}
+
+/** Build a File with JPEG magic bytes. */
+function makeJpegFile(sizeBytes: number, name = "test.jpg"): File {
+  const buf = new Uint8Array(sizeBytes);
+  buf[0] = 0xff; buf[1] = 0xd8; buf[2] = 0xff;
+  return new File([buf], name, { type: "image/jpeg" });
+}
+
+function renderUploadField() {
+  const onUploaded = vi.fn();
+  render(
+    <UploadField
+      label="Upload Brand Logo"
+      uploadType="brand-logo"
+      apiToken="test-token"
+      onUploaded={onUploaded}
+    />
+  );
+  return { onUploaded };
+}
+
+// ── validateMagicBytes unit tests ─────────────────────────────────────────────
+
+describe("validateMagicBytes", () => {
+  it("accepts a genuine PNG file", async () => {
+    const file = makePngFile(100);
+    expect(await validateMagicBytes(file)).toBe(true);
   });
-  mocks.fetchImpl.mockResolvedValue({ ok: true, status: 200 });
-}
 
-function getFileInput() {
-  return document.querySelector('input[type="file"]') as HTMLInputElement;
-}
+  it("accepts a genuine JPEG file", async () => {
+    const file = makeJpegFile(100);
+    expect(await validateMagicBytes(file)).toBe(true);
+  });
 
-function uploadFile(file: File) {
-  fireEvent.change(getFileInput(), { target: { files: [file] } });
-}
+  it("rejects a file with EXE magic bytes claiming to be PNG", async () => {
+    const file = makeSpoofedPngFile();
+    expect(await validateMagicBytes(file)).toBe(false);
+  });
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+  it("accepts SVG without a binary check (no magic bytes defined)", async () => {
+    const svgContent = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+    const file = new File([svgContent], "icon.svg", { type: "image/svg+xml" });
+    expect(await validateMagicBytes(file)).toBe(true);
+  });
+});
 
-describe("UploadField", () => {
+// ── UPLOAD_TYPE_CONFIGS ───────────────────────────────────────────────────────
+
+describe("UPLOAD_TYPE_CONFIGS", () => {
+  it("brand-logo limit is 2 MB", () => {
+    expect(UPLOAD_TYPE_CONFIGS["brand-logo"].maxSizeBytes).toBe(2 * 1024 * 1024);
+  });
+
+  it("product-image limit is 5 MB", () => {
+    expect(UPLOAD_TYPE_CONFIGS["product-image"].maxSizeBytes).toBe(5 * 1024 * 1024);
+  });
+
+  it("user-avatar limit is 1 MB", () => {
+    expect(UPLOAD_TYPE_CONFIGS["user-avatar"].maxSizeBytes).toBe(1 * 1024 * 1024);
+  });
+});
+
+// ── UploadField component integration tests ───────────────────────────────────
+
+describe("UploadField — oversized file", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.onUploaded.mockReset();
+    mockPost.mockReset();
   });
 
-  // ── Happy path ───────────────────────────────────────────────────────────────
+  it("shows an error and never calls presign when file exceeds the size limit", async () => {
+    renderUploadField();
 
-  it("happy path: presign → PUT to presigned URL → verify → onUploaded fires", async () => {
-    defaultPresignResolve();
+    const logoConfig = UPLOAD_TYPE_CONFIGS["brand-logo"];
+    // 3 MB — exceeds the 2 MB brand-logo limit
+    const oversizedFile = makePngFile(3 * 1024 * 1024);
 
-    render(
-      <UploadField
-        label="Brand Logo"
-        accept="image/*"
-        uploadType="brand-logo"
-        apiToken="tok-test"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("logo.png", "image/png", 512));
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, oversizedFile);
 
     await waitFor(() => {
-      expect(mocks.post).toHaveBeenCalledWith("/upload/presign", {
-        filename: "logo.png",
-        contentType: "image/png",
-        uploadType: "brand-logo",
-      });
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByRole("alert").textContent).toContain(logoConfig.label);
     });
 
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+});
+
+describe("UploadField — wrong MIME type", () => {
+  beforeEach(() => {
+    mockPost.mockReset();
+  });
+
+  it("shows an error and never calls presign for a disallowed MIME type", async () => {
+    renderUploadField();
+
+    const buf = new Uint8Array(100);
+    const pdfFile = new File([buf], "document.pdf", { type: "application/pdf" });
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, pdfFile);
+
     await waitFor(() => {
-      expect(mocks.fetchImpl).toHaveBeenCalledWith(
-        "https://s3.example.com/presigned-url",
-        expect.objectContaining({ method: "PUT", body: expect.any(File) })
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+});
+
+describe("UploadField — spoofed MIME (magic-byte check)", () => {
+  beforeEach(() => {
+    mockPost.mockReset();
+  });
+
+  it("shows an error and never calls presign when magic bytes do not match declared MIME", async () => {
+    renderUploadField();
+
+    const spoofed = makeSpoofedPngFile();
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, spoofed);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+});
+
+describe("UploadField — valid file proceeds to presign", () => {
+  beforeEach(() => {
+    mockPost.mockReset();
+    // Mock presign response
+    mockPost.mockResolvedValueOnce({
+      data: {
+        uploadUrl: "https://s3.example.com/upload",
+        key: "brand-assets/test.png",
+        publicUrl: "https://cdn.example.com/test.png",
+      },
+    });
+    // Mock verify response
+    mockPost.mockResolvedValueOnce({ data: { ok: true } });
+
+    // Mock fetch for the S3 PUT
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+  });
+
+  it("calls presign and onUploaded for a valid PNG within size limits", async () => {
+    const { onUploaded } = renderUploadField();
+
+    // 500 KB — well within the 2 MB brand-logo limit
+    const validFile = makePngFile(500 * 1024);
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, validFile);
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        "/upload/presign",
+        expect.objectContaining({ type: "brand-logo" })
       );
     });
 
     await waitFor(() => {
-      expect(mocks.post).toHaveBeenCalledWith("/upload/verify", {
-        key: "uploads/test-key.png",
-      });
-    });
-
-    await waitFor(() => {
-      expect(mocks.onUploaded).toHaveBeenCalledWith(
-        "uploads/test-key.png",
-        "https://cdn.example.com/uploads/test-key.png"
+      expect(onUploaded).toHaveBeenCalledWith(
+        "brand-assets/test.png",
+        "https://cdn.example.com/test.png"
       );
     });
-  });
-
-  it("shows the uploaded image preview after a successful upload", async () => {
-    defaultPresignResolve();
-
-    render(
-      <UploadField
-        label="Brand Logo"
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("logo.png", "image/png", 512));
-
-    await waitFor(() => {
-      expect(screen.getByText(/uploaded/i)).toBeInTheDocument();
-    });
-  });
-
-  // ── MIME validation ───────────────────────────────────────────────────────────
-
-  it("disallowed MIME → shows inline error without making any network calls", async () => {
-    render(
-      <UploadField
-        label="Logo"
-        accept="image/png,image/jpeg"
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("clip.mp4", "video/mp4", 512));
-
-    await waitFor(() => {
-      expect(screen.getByText(/not allowed/i)).toBeInTheDocument();
-    });
-
-    expect(mocks.post).not.toHaveBeenCalled();
-    expect(mocks.fetchImpl).not.toHaveBeenCalled();
-    expect(mocks.onUploaded).not.toHaveBeenCalled();
-  });
-
-  it("accepts any image/* mime type when accept defaults to image/*", async () => {
-    defaultPresignResolve();
-
-    render(
-      <UploadField
-        label="Logo"
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("logo.webp", "image/webp", 512));
-
-    await waitFor(() => {
-      expect(mocks.post).toHaveBeenCalledWith("/upload/presign", expect.anything());
-    });
-
-    expect(screen.queryByText(/not allowed/i)).not.toBeInTheDocument();
-  });
-
-  // ── Size validation ───────────────────────────────────────────────────────────
-
-  it("oversize file → shows inline error without making any network calls", async () => {
-    render(
-      <UploadField
-        label="Logo"
-        accept="image/*"
-        maxSizeBytes={100}
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("big.png", "image/png", 200)); // 200 B > 100 B limit
-
-    await waitFor(() => {
-      expect(screen.getByText(/too large/i)).toBeInTheDocument();
-    });
-
-    expect(mocks.post).not.toHaveBeenCalled();
-    expect(mocks.fetchImpl).not.toHaveBeenCalled();
-    expect(mocks.onUploaded).not.toHaveBeenCalled();
-  });
-
-  it("file at exactly maxSizeBytes is allowed", async () => {
-    defaultPresignResolve();
-
-    render(
-      <UploadField
-        label="Logo"
-        accept="image/*"
-        maxSizeBytes={512}
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("exact.png", "image/png", 512)); // exactly at limit
-
-    await waitFor(() => {
-      expect(mocks.post).toHaveBeenCalledWith("/upload/presign", expect.anything());
-    });
-
-    expect(screen.queryByText(/too large/i)).not.toBeInTheDocument();
-  });
-
-  // ── PUT failure + retry ───────────────────────────────────────────────────────
-
-  it("PUT failure → shows error with Retry button", async () => {
-    mocks.post.mockImplementation(async (url: string) => {
-      if (url === "/upload/presign") {
-        return {
-          data: {
-            presignedUrl: "https://s3.example.com/presigned-url",
-            key: "uploads/test-key.png",
-            publicUrl: "https://cdn.example.com/uploads/test-key.png",
-          },
-        };
-      }
-      throw new Error(`Unexpected POST to ${url}`);
-    });
-    mocks.fetchImpl.mockResolvedValue({ ok: false, status: 500 });
-
-    render(
-      <UploadField
-        label="Logo"
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("logo.png", "image/png", 512));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
-    });
-
-    expect(mocks.onUploaded).not.toHaveBeenCalled();
-  });
-
-  it("Retry button re-attempts the full upload and fires onUploaded on success", async () => {
-    // First PUT fails, subsequent ones succeed
-    mocks.post.mockImplementation(async (url: string) => {
-      if (url === "/upload/presign") {
-        return {
-          data: {
-            presignedUrl: "https://s3.example.com/presigned-url",
-            key: "uploads/test-key.png",
-            publicUrl: "https://cdn.example.com/uploads/test-key.png",
-          },
-        };
-      }
-      if (url === "/upload/verify") {
-        return { data: { ok: true } };
-      }
-      throw new Error(`Unexpected POST to ${url}`);
-    });
-    mocks.fetchImpl
-      .mockResolvedValueOnce({ ok: false, status: 500 }) // first PUT fails
-      .mockResolvedValue({ ok: true, status: 200 });     // retry succeeds
-
-    render(
-      <UploadField
-        label="Logo"
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("logo.png", "image/png", 512));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
-
-    await waitFor(() => {
-      expect(mocks.onUploaded).toHaveBeenCalledWith(
-        "uploads/test-key.png",
-        "https://cdn.example.com/uploads/test-key.png"
-      );
-    });
-  });
-
-  // ── Drag and drop ─────────────────────────────────────────────────────────────
-
-  it("drag and drop: dropping a file triggers handleFile and calls the API", async () => {
-    defaultPresignResolve();
-
-    render(
-      <UploadField
-        label="Brand Logo"
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    const dropZone = screen.getByRole("button", { name: /brand logo/i });
-    const file = makeFile("logo.png", "image/png", 512);
-
-    fireEvent.drop(dropZone, {
-      dataTransfer: { files: [file] },
-    });
-
-    await waitFor(() => {
-      expect(mocks.post).toHaveBeenCalledWith("/upload/presign", expect.anything());
-    });
-  });
-
-  it("MIME error does not show a Retry button (no file to retry with)", async () => {
-    render(
-      <UploadField
-        label="Logo"
-        accept="image/png"
-        uploadType="brand-logo"
-        apiToken="tok"
-        onUploaded={mocks.onUploaded}
-      />
-    );
-
-    uploadFile(makeFile("video.mp4", "video/mp4", 512));
-
-    await waitFor(() => {
-      expect(screen.getByText(/not allowed/i)).toBeInTheDocument();
-    });
-
-    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
   });
 });

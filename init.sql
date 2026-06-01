@@ -1,7 +1,10 @@
--- BrandBlitz Database Schema
--- PostgreSQL 17
+-- BrandBlitz PostgreSQL bootstrap.
+-- Fresh installs load the baseline schema, then the forward migrations.
+-- The files are included relative to this script so `psql -f init.sql` works
+-- both in CI and in the Postgres container used by docker-compose.
 
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+\ir apps/api/migrations/00000-initial.sql
+\ir apps/api/migrations/00001-hot-path-indexes.sql
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- USERS
@@ -17,7 +20,7 @@ CREATE TABLE users (
   kyc_complete      BOOLEAN NOT NULL DEFAULT FALSE,
   stellar_address   TEXT,
   embedded_wallet_address TEXT,
-  muxed_id          BIGINT,
+  referral_code     TEXT UNIQUE,
   phone_hash        TEXT UNIQUE,
   phone_verified    BOOLEAN NOT NULL DEFAULT FALSE,
   phone_verified_at TIMESTAMPTZ,
@@ -40,8 +43,6 @@ CREATE INDEX idx_users_google_id    ON users (google_id);
 CREATE INDEX idx_users_phone_hash   ON users (phone_hash);
 CREATE INDEX idx_users_total_score  ON users (total_score DESC);
 CREATE INDEX idx_users_league       ON users (league);
-CREATE UNIQUE INDEX users_muxed_id_unique ON users (muxed_id) WHERE muxed_id IS NOT NULL;
-
 -- ─────────────────────────────────────────────────────────────────────────────
 -- BRANDS
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ CREATE TABLE challenges (
   brand_id            UUID NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
   challenge_id        TEXT NOT NULL UNIQUE,
   status              TEXT NOT NULL DEFAULT 'pending_deposit'
-                        CHECK (status IN ('pending_deposit', 'active', 'ended', 'settled', 'payout_failed', 'cancelled')),
+                        CHECK (status IN ('pending_deposit', 'active', 'ended', 'settled', 'payout_failed', 'cancelled', 'refunded')),
   pool_amount_stroops BIGINT NOT NULL DEFAULT 0,
   stellar_deposit_tx  TEXT,
   deposit_address     TEXT,
@@ -87,7 +88,7 @@ CREATE TABLE challenges (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT challenges_ends_after_starts CHECK (ends_at IS NULL OR ends_at > starts_at),
   CONSTRAINT challenges_pool_amount_positive CHECK (
-    status IN ('pending_deposit', 'cancelled') OR pool_amount_stroops > 0
+    status IN ('pending_deposit', 'cancelled', 'refunded') OR pool_amount_stroops > 0
   )
 );
 
@@ -130,7 +131,7 @@ CREATE TABLE game_sessions (
   device_id             TEXT,
   ip_address            INET,
   status                TEXT NOT NULL DEFAULT 'warmup'
-                          CHECK (status IN ('warmup', 'active', 'completed', 'flagged')),
+                          CHECK (status IN ('warmup', 'active', 'completed', 'flagged', 'abandoned')),
   is_practice           BOOLEAN NOT NULL DEFAULT FALSE,
   warmup_started_at     TIMESTAMPTZ,
   warmup_completed_at   TIMESTAMPTZ,
@@ -201,6 +202,24 @@ CREATE INDEX idx_payouts_user_id      ON payouts (user_id);
 CREATE INDEX idx_payouts_status       ON payouts (status);
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- REFUNDS
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE refunds (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  challenge_id     UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE UNIQUE,
+  admin_id         UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason           TEXT NOT NULL,
+  amount_stroops   BIGINT NOT NULL CHECK (amount_stroops > 0),
+  destination      TEXT NOT NULL,
+  tx_hash          TEXT NOT NULL UNIQUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_refunds_admin_id ON refunds (admin_id);
+CREATE INDEX idx_refunds_tx_hash  ON refunds (tx_hash);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- FRAUD FLAGS
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE fraud_flags (
@@ -267,6 +286,36 @@ CREATE TABLE referrals (
 CREATE INDEX idx_referrals_referrer_id ON referrals (referrer_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- REFERRAL PAYOUTS
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE referral_payouts (
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  referral_id              UUID NOT NULL REFERENCES referrals(id) ON DELETE CASCADE UNIQUE,
+  challenge_id             UUID REFERENCES challenges(id) ON DELETE CASCADE,
+  referrer_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  referred_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  referrer_stellar_address TEXT,
+  referred_stellar_address TEXT,
+  referrer_amount_stroops  BIGINT NOT NULL DEFAULT 0,
+  referred_amount_stroops  BIGINT NOT NULL DEFAULT 0,
+  status                   TEXT NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending', 'sent', 'failed')),
+  tx_hash                  TEXT,
+  error_message            TEXT NOT NULL DEFAULT '',
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT referral_payouts_failed_requires_message
+    CHECK ((status = 'failed') = (LENGTH(error_message) > 0)),
+  CONSTRAINT referral_payouts_amounts_positive CHECK (
+    referrer_amount_stroops > 0 AND referred_amount_stroops > 0
+  )
+);
+
+CREATE INDEX idx_referral_payouts_referrer_id ON referral_payouts (referrer_id);
+CREATE INDEX idx_referral_payouts_referred_id ON referral_payouts (referred_id);
+CREATE INDEX idx_referral_payouts_status ON referral_payouts (status);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- UPDATED_AT trigger helper
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -281,6 +330,7 @@ CREATE TRIGGER users_updated_at           BEFORE UPDATE ON users             FOR
 CREATE TRIGGER brands_updated_at          BEFORE UPDATE ON brands            FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER challenges_updated_at      BEFORE UPDATE ON challenges        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER payouts_updated_at         BEFORE UPDATE ON payouts           FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER refunds_updated_at         BEFORE UPDATE ON refunds           FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER challenge_questions_updated_at BEFORE UPDATE ON challenge_questions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER game_sessions_updated_at   BEFORE UPDATE ON game_sessions    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -288,6 +338,7 @@ CREATE TRIGGER fraud_flags_updated_at     BEFORE UPDATE ON fraud_flags      FOR 
 CREATE TRIGGER league_assignments_updated_at BEFORE UPDATE ON league_assignments FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER user_badges_updated_at     BEFORE UPDATE ON user_badges      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER referrals_updated_at       BEFORE UPDATE ON referrals       FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER referral_payouts_updated_at BEFORE UPDATE ON referral_payouts FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- APP CONFIG (runtime-tunable key/value store)

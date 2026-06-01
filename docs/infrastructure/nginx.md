@@ -6,6 +6,10 @@ BrandBlitz uses the official `nginx:1.25-alpine` image. In production the config
 generated from a template so that shell variables (e.g. `${DOMAIN}`) are substituted
 at container start rather than baked in at build time.
 
+Response compression is handled in the API process with Express middleware, so
+this nginx config intentionally does not add a second gzip or brotli layer. That
+keeps `Vary: Accept-Encoding` correct without double-compressing JSON payloads.
+
 ## How envsubst works
 
 The official nginx image automatically processes any `*.template` file mounted under

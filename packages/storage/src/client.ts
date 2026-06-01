@@ -4,8 +4,9 @@ export const s3 = new S3Client({
   endpoint: process.env.S3_ENDPOINT,
   region: process.env.S3_REGION ?? "auto",
   credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY!,
-    secretAccessKey: process.env.S3_SECRET_KEY!,
+    accessKeyId: process.env.S3_ACCESS_KEY_ID ?? process.env.S3_ACCESS_KEY!,
+    secretAccessKey:
+      process.env.S3_SECRET_ACCESS_KEY ?? process.env.S3_SECRET_KEY!,
   },
   // true for MinIO (dev), false for Cloudflare R2 or AWS S3 (prod)
   forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
@@ -62,6 +63,6 @@ export async function uploadObject({
       ...(immutable
         ? { CacheControl: "public, max-age=31536000, immutable" }
         : {}),
-    })
+    }),
   );
 }

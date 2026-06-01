@@ -1,0 +1,36 @@
+name: "🐛 Bug Report"
+description: Report something that isn't working as expected in BrandBlitz.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please provide a clear and concise report of the issue to help us resolve it quickly.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+      placeholder: e.g., "The 'Start Challenge' button remains disabled even after 20 seconds."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What is the expected correct behavior?
+      placeholder: e.g., "The button should become active exactly after the 20-second warmup period."
+    validations:
+      required: true
+  - type: textarea
+    id: relevant-files
+    attributes:
+      label: Relevant Files
+      description: Which files or directories are involved in this bug?
+      placeholder: "e.g., apps/web/src/hooks/useGameSession.ts"
+  - type: textarea
+    id: resources
+    attributes:
+      label: Resources
+      description: Links to logs, screenshots, or related issues.
+      placeholder: "e.g., Link to Sentry issue or screenshot"

@@ -17,6 +17,8 @@ export default defineProject({
     root: projectRoot,
     globals: true,
     environment: "node",
+    envDir: projectRoot,
+    envFiles: [".env.test"],
     setupFiles: [sharedSetupFile],
     include: ["src/**/*.test.ts"],
     coverage: {

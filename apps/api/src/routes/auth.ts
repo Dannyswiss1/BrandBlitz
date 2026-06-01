@@ -6,8 +6,17 @@ import { authLimiter } from "../middleware/rate-limit";
 import { authenticate } from "../middleware/authenticate";
 import { verifyGoogleIdToken } from "../services/google-auth";
 import {
-  signAccessToken, signRefreshToken, verifyRefreshToken,
-  markJtiUsed, registerRefreshJti, revokeAllUserRefreshTokens, isJtiRevoked,
+  consumePendingReferralAttribution,
+  ensureUserReferralCode,
+} from "../services/referrals";
+import {
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+  markJtiUsed,
+  registerRefreshJti,
+  revokeAllUserRefreshTokens,
+  isJtiRevoked,
 } from "../lib/tokens";
 
 const router = Router();
@@ -15,15 +24,36 @@ const router = Router();
 const GoogleCallbackSchema = z.object({ idToken: z.string().min(1) });
 const RefreshTokenSchema = z.object({ refreshToken: z.string().min(1) });
 
-function serializeUser(user: { id: string; email: string; display_name?: string | null; username?: string | null; avatar_url?: string | null; role?: string | null }) {
-  return { id: user.id, email: user.email, displayName: user.display_name ?? null, username: user.username ?? null, avatarUrl: user.avatar_url ?? null, role: (user as any).role ?? "player" };
+function serializeUser(user: {
+  id: string;
+  email: string;
+  display_name?: string | null;
+  username?: string | null;
+  avatar_url?: string | null;
+  role?: string | null;
+}) {
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.display_name ?? null,
+    username: user.username ?? null,
+    avatarUrl: user.avatar_url ?? null,
+    role: (user as any).role ?? "player",
+  };
 }
 
 /** POST /auth/google/callback */
 router.post("/google/callback", authLimiter, async (req, res) => {
   const { idToken } = GoogleCallbackSchema.parse(req.body);
   const profile = await verifyGoogleIdToken(idToken);
-  const user = await upsertUser({ email: profile.email, googleId: profile.googleId, name: profile.name, avatarUrl: profile.avatarUrl });
+  const user = await upsertUser({
+    email: profile.email,
+    googleId: profile.googleId,
+    name: profile.name,
+    avatarUrl: profile.avatarUrl,
+  });
+  await ensureUserReferralCode(user.id);
+  await consumePendingReferralAttribution(user.id, req);
   const accessToken = signAccessToken(user);
   const refreshToken = signRefreshToken(user);
   const payload = verifyRefreshToken(refreshToken);
@@ -42,18 +72,27 @@ router.get("/me", authenticate, async (req, res) => {
 router.post("/refresh", async (req, res) => {
   const { refreshToken } = RefreshTokenSchema.parse(req.body);
   let payload: ReturnType<typeof verifyRefreshToken>;
-  try { payload = verifyRefreshToken(refreshToken); }
-  catch { throw createError("Invalid refresh token", 401, "INVALID_REFRESH_TOKEN"); }
+  try {
+    payload = verifyRefreshToken(refreshToken);
+  } catch {
+    throw createError("Invalid refresh token", 401, "INVALID_REFRESH_TOKEN");
+  }
 
   const alreadyUsed = await markJtiUsed(payload.jti);
   if (alreadyUsed) {
     await revokeAllUserRefreshTokens(payload.sub);
-    throw createError("Refresh token reuse detected — all sessions revoked", 401, "TOKEN_REUSE");
+    throw createError(
+      "Refresh token reuse detected — all sessions revoked",
+      401,
+      "TOKEN_REUSE",
+    );
   }
-  if (await isJtiRevoked(payload.jti)) throw createError("Refresh token revoked", 401, "TOKEN_REVOKED");
+  if (await isJtiRevoked(payload.jti))
+    throw createError("Refresh token revoked", 401, "TOKEN_REVOKED");
 
   const user = await findUserById(payload.sub);
-  if (!user) throw createError("Invalid refresh token", 401, "INVALID_REFRESH_TOKEN");
+  if (!user)
+    throw createError("Invalid refresh token", 401, "INVALID_REFRESH_TOKEN");
 
   const newAccess = signAccessToken(user);
   const newRefresh = signRefreshToken(user);
@@ -66,8 +105,12 @@ router.post("/refresh", async (req, res) => {
 router.post("/logout", async (req, res) => {
   const body = RefreshTokenSchema.safeParse(req.body);
   if (body.success) {
-    try { const p = verifyRefreshToken(body.data.refreshToken); await markJtiUsed(p.jti); }
-    catch { /* already invalid */ }
+    try {
+      const p = verifyRefreshToken(body.data.refreshToken);
+      await markJtiUsed(p.jti);
+    } catch {
+      /* already invalid */
+    }
   }
   res.json({ ok: true });
 });

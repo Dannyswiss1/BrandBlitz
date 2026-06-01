@@ -109,7 +109,6 @@ export async function anonymizeUser(userId: string): Promise<void> {
        phone_verified_at       = NULL,
        stellar_address         = NULL,
        embedded_wallet_address = NULL,
-       muxed_id                = NULL,
        updated_at              = NOW()
      WHERE id = $1`,
     [userId, `deleted_${token}@gdpr.invalid`, `deleted_${token}`]

@@ -1,10 +1,10 @@
 # Production overrides: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 secrets:
-  s3_secret_key:
-    external: true    # create with: printf '<value>' | docker secret create s3_secret_key -
+  s3_secret_access_key:
+    external: true # create with: printf '<value>' | docker secret create s3_secret_access_key -
   minio_root_password:
-    external: true    # create with: printf '<value>' | docker secret create minio_root_password -
+    external: true # create with: printf '<value>' | docker secret create minio_root_password -
 
 services:
   postgres:
@@ -39,10 +39,10 @@ services:
     environment:
       NODE_ENV: production
       S3_ENDPOINT: ${S3_ENDPOINT:-https://minio:9000}
-      S3_SECRET_KEY_FILE: /run/secrets/s3_secret_key
-      S3_SECRET_KEY: ""
+      S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+      S3_SECRET_ACCESS_KEY: ""
     secrets:
-      - s3_secret_key
+      - s3_secret_access_key
     deploy:
       replicas: 2
       resources:
@@ -54,15 +54,25 @@ services:
     environment:
       NODE_ENV: production
       S3_ENDPOINT: ${S3_ENDPOINT:-https://minio:9000}
-      S3_SECRET_KEY_FILE: /run/secrets/s3_secret_key
-      S3_SECRET_KEY: ""
+      S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+      S3_SECRET_ACCESS_KEY: ""
     secrets:
-      - s3_secret_key
+      - s3_secret_access_key
     deploy:
       replicas: 1
       resources:
         limits:
           memory: 256m
+
+  deposit-monitor:
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 128m
 
   web:
     restart: unless-stopped

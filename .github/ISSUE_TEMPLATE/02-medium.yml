@@ -1,0 +1,38 @@
+name: "⚡ Medium Complexity (Drips Wave)"
+description: Component refactors, new utility functions, or logic updates.
+labels: ["medium", "drips-wave"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for contributing! Medium complexity tasks involve meaningful code changes, refactors, or new functionality that requires testing.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Detailed explanation of the change or feature.
+      placeholder: e.g., "Refactor the Button component to support a 'loading' state."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What must be true for this to be considered "done"?
+      placeholder: |
+        - [ ] Button supports loading prop
+        - [ ] Spinner is shown when loading=true
+        - [ ] Unit tests cover the new state
+    validations:
+      required: true
+  - type: textarea
+    id: relevant-files
+    attributes:
+      label: Relevant Files
+      description: Which files or directories are involved in this change?
+      placeholder: "apps/web/src/components/ui/Button.tsx"
+  - type: textarea
+    id: resources
+    attributes:
+      label: Resources
+      description: Links to documentation, Figma, related issues, or other resources.

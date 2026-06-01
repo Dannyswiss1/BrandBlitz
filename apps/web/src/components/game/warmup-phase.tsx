@@ -28,8 +28,7 @@ export function WarmupPhase({ challenge, apiToken, onComplete }: WarmupPhaseProp
   useEffect(() => {
     // Signal to server that warmup has started to initialize timing & session
     const api = createApiClient(apiToken);
-    api.post(`/sessions/${challenge.id}/warmup-start`).catch((error) => {
-      console.error("Failed to initialize warmup session:", error);
+    api.post(`/sessions/${challenge.id}/warmup-start`).catch(() => {
       setStatusMessage("Failed to initialize warmup. Please refresh.");
     });
 

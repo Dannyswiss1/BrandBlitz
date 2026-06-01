@@ -6,6 +6,10 @@ const mockSend = vi.fn();
 const mockGetSignedUrl = vi.fn();
 const mockGetPublicUrl = vi.fn((bucket: string, key: string) => `https://public/${bucket}/${key}`);
 
+const mockRedisGet = vi.fn();
+const mockRedisSet = vi.fn();
+const mockRedisDel = vi.fn();
+
 vi.mock("../middleware/authenticate", () => ({
   authenticate: (req: any, _res: any, next: any) => {
     req.user = { sub: "user-123", email: "test@example.com" };
@@ -37,6 +41,14 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
   getSignedUrl: mockGetSignedUrl,
 }));
 
+vi.mock("../lib/redis", () => ({
+  redis: {
+    get: mockRedisGet,
+    set: mockRedisSet,
+    del: mockRedisDel,
+  },
+}));
+
 import { errorHandler } from "../middleware/error";
 
 let app: express.Express;
@@ -53,6 +65,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Default: Redis set/del succeed silently
+  mockRedisSet.mockResolvedValue("OK");
+  mockRedisDel.mockResolvedValue(1);
 });
 
 afterAll(() => {
@@ -91,6 +106,12 @@ describe("upload routes integration", () => {
       "brand-assets",
       response.body.key
     );
+
+    // Ownership record must be created in Redis
+    expect(mockRedisSet).toHaveBeenCalledOnce();
+    const [redisKey, , , ttl] = mockRedisSet.mock.calls[0];
+    expect(redisKey).toContain(`user-123:${response.body.key}`);
+    expect(ttl).toBeGreaterThan(0);
   });
 
   it("POST /upload/presign rejects disallowed MIME types with 400", async () => {
@@ -143,6 +164,8 @@ describe("upload routes integration", () => {
       Bucket: "brand-assets",
       Key: "logos/test-key",
     });
+    // Ownership record must be cleared after successful verify
+    expect(mockRedisDel).toHaveBeenCalledOnce();
   });
 
   it("POST /upload/verify returns 404 when the object does not exist", async () => {
@@ -156,12 +179,10 @@ describe("upload routes integration", () => {
     expect(response.body.error).toBe("File not found in storage");
   });
 
-  // ── MIME magic-byte validation (issue #116) ────────────────────────────────
+  // ── MIME magic-byte validation ─────────────────────────────────────────────
 
   it("POST /upload/verify returns 200 for a valid PNG (magic bytes match)", async () => {
-    // HeadObject → ContentType: image/png
     mockSend.mockResolvedValueOnce({ ContentType: "image/png" });
-    // GetObject Range → PNG magic bytes
     const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     mockSend.mockResolvedValueOnce({
       Body: { transformToByteArray: async () => pngMagic },
@@ -176,15 +197,13 @@ describe("upload routes integration", () => {
   });
 
   it("POST /upload/verify returns 400 and deletes when magic bytes mismatch declared MIME", async () => {
-    // HeadObject → ContentType: image/png
     mockSend.mockResolvedValueOnce({ ContentType: "image/png" });
-    // GetObject Range → JPEG magic bytes (mismatch!)
+    // JPEG magic bytes — mismatch with declared image/png
     const jpegMagic = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
     mockSend.mockResolvedValueOnce({
       Body: { transformToByteArray: async () => jpegMagic },
     });
-    // DeleteObject call
-    mockSend.mockResolvedValueOnce({});
+    mockSend.mockResolvedValueOnce({}); // DeleteObject
 
     const response = await request(app)
       .post("/upload/verify")
@@ -192,7 +211,6 @@ describe("upload routes integration", () => {
       .expect(400);
 
     expect(response.body.error).toBe("File content does not match declared content type");
-    // Verify DeleteObjectCommand was called (3rd mockSend call)
     expect(mockSend).toHaveBeenCalledTimes(3);
   });
 
@@ -254,7 +272,6 @@ describe("upload routes integration", () => {
   });
 
   it("POST /upload/verify returns 400 for SVG with entity-encoded javascript: URI", async () => {
-    // &#106;avascript: decodes to javascript: — must be caught after entity decoding
     mockSend.mockResolvedValueOnce({ ContentType: "image/svg+xml" });
     const svgContent = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><a href="&#106;avascript:alert(1)"><text>x</text></a></svg>');
     mockSend.mockResolvedValueOnce({ Body: { transformToByteArray: async () => svgContent } });
@@ -312,7 +329,7 @@ describe("upload routes integration", () => {
 
   it("POST /upload/verify returns 400 and deletes when declared MIME is not in the allow-list", async () => {
     mockSend.mockResolvedValueOnce({ ContentType: "application/pdf" });
-    mockSend.mockResolvedValueOnce({});
+    mockSend.mockResolvedValueOnce({}); // DeleteObject
 
     const response = await request(app)
       .post("/upload/verify")
@@ -320,7 +337,62 @@ describe("upload routes integration", () => {
       .expect(400);
 
     expect(response.body.error).toBe("Declared content type is not allowed");
-    // DeleteObject was called
     expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  // ── Orphan abort (issue #161) ──────────────────────────────────────────────
+
+  it("DELETE /upload/abort deletes the object and returns 204 when caller owns the key", async () => {
+    mockRedisGet.mockResolvedValueOnce("1"); // ownership confirmed
+    mockSend.mockResolvedValueOnce({});
+
+    await request(app)
+      .delete("/upload/abort")
+      .send({ key: "logos/orphan-key" })
+      .expect(204);
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]?.input).toMatchObject({
+      Bucket: "brand-assets",
+      Key: "logos/orphan-key",
+    });
+    // Ownership record must be removed after successful delete
+    expect(mockRedisDel).toHaveBeenCalledOnce();
+  });
+
+  it("DELETE /upload/abort targets the correct bucket for avatars/", async () => {
+    mockRedisGet.mockResolvedValueOnce("1");
+    mockSend.mockResolvedValueOnce({});
+
+    await request(app)
+      .delete("/upload/abort")
+      .send({ key: "avatars/orphan-key" })
+      .expect(204);
+
+    expect(mockSend.mock.calls[0][0]?.input).toMatchObject({
+      Bucket: "brand-assets",
+      Key: "avatars/orphan-key",
+    });
+  });
+
+  it("DELETE /upload/abort returns 403 when the caller did not create the key (IDOR guard)", async () => {
+    mockRedisGet.mockResolvedValueOnce(null); // no ownership record
+
+    const response = await request(app)
+      .delete("/upload/abort")
+      .send({ key: "logos/someone-elses-key" })
+      .expect(403);
+
+    expect(response.body.error).toBe("Not authorised to abort this upload");
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("DELETE /upload/abort returns 400 when key is missing", async () => {
+    const response = await request(app)
+      .delete("/upload/abort")
+      .send({})
+      .expect(400);
+
+    expect(response.body.error).toBe("Validation Error");
   });
 });

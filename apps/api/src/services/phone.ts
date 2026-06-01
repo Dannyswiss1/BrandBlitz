@@ -22,7 +22,7 @@ function getVerifyServiceSid(): string {
 }
 
 function getPhoneHashSalt(): string {
-  const salt = process.env.PHONE_HASH_SALT;
+  const salt = config.PHONE_HASH_SALT;
   if (!salt) {
     throw new Error("PHONE_HASH_SALT is required");
   }

@@ -5,6 +5,8 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 
 var mockFindUserById = vi.fn();
+var mockFindUserByPhoneHash = vi.fn();
+var mockGetUserPublicProfileByUsername = vi.fn();
 var mockUpdateUserWallet = vi.fn();
 var mockMarkPhoneVerified = vi.fn();
 var mockSendVerificationCode = vi.fn();
@@ -14,9 +16,13 @@ var mockRedisExpire = vi.fn();
 var mockRedisGet = vi.fn();
 var mockRedisSet = vi.fn();
 var mockRedisDel = vi.fn();
+var mockGetStreak = vi.fn();
+var mockRepairStreak = vi.fn();
 
 vi.mock("../db/queries/users", () => ({
   findUserById: mockFindUserById,
+  findUserByPhoneHash: mockFindUserByPhoneHash,
+  getUserPublicProfileByUsername: mockGetUserPublicProfileByUsername,
   updateUserWallet: mockUpdateUserWallet,
   markPhoneVerified: mockMarkPhoneVerified,
 }));
@@ -24,6 +30,8 @@ vi.mock("../db/queries/users", () => ({
 vi.mock("../services/phone", () => ({
   sendVerificationCode: mockSendVerificationCode,
   checkVerificationCode: mockCheckVerificationCode,
+  normalizePhoneNumber: (value: string) => value,
+  hashPhoneNumber: (value: string) => crypto.createHash("sha256").update(value).digest("hex"),
 }));
 
 vi.mock("../lib/redis", () => ({
@@ -36,6 +44,25 @@ vi.mock("../lib/redis", () => ({
   },
 }));
 
+vi.mock("../services/streaks", () => ({
+  getStreak: mockGetStreak,
+  repairStreak: mockRepairStreak,
+}));
+
+vi.mock("../middleware/rate-limit", () => ({
+  apiLimiter: (_req: any, _res: any, next: any) => next(),
+  authLimiter: (_req: any, _res: any, next: any) => next(),
+  challengeStartLimiter: (_req: any, _res: any, next: any) => next(),
+  uploadLimiter: (_req: any, _res: any, next: any) => next(),
+  webhookLimiter: (_req: any, _res: any, next: any) => next(),
+}));
+
+vi.mock("@brandblitz/stellar", () => ({
+  WARMUP_MIN_SECONDS: 20,
+  validateMuxedAccount: vi.fn(),
+  createMuxedAccount: vi.fn(),
+}));
+
 import { errorHandler } from "../middleware/error";
 
 let app: express.Express;
@@ -43,11 +70,9 @@ const userId = "user-123";
 const phone = "+15550000000";
 const phoneHash = crypto.createHash("sha256").update(phone).digest("hex");
 const authToken = () =>
-  jwt.sign(
-    { sub: userId, email: "me@example.com" },
-    process.env.JWT_SECRET as string,
-    { expiresIn: "1h" }
-  );
+  jwt.sign({ sub: userId, email: "me@example.com" }, process.env.JWT_SECRET as string, {
+    expiresIn: "1h",
+  });
 
 const userRecord = {
   id: userId,
@@ -85,6 +110,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mockFindUserById.mockReset();
+  mockFindUserByPhoneHash.mockReset();
+  mockGetUserPublicProfileByUsername.mockReset();
   mockUpdateUserWallet.mockReset();
   mockMarkPhoneVerified.mockReset();
   mockSendVerificationCode.mockReset();
@@ -94,6 +121,8 @@ beforeEach(() => {
   mockRedisGet.mockReset();
   mockRedisSet.mockReset();
   mockRedisDel.mockReset();
+  mockGetStreak.mockReset();
+  mockRepairStreak.mockReset();
 });
 
 afterAll(() => {
@@ -101,6 +130,51 @@ afterAll(() => {
 });
 
 describe("users routes integration", () => {
+  it("GET /users/me/streak returns formatted streak data", async () => {
+    mockGetStreak.mockResolvedValue({
+      streak: 7,
+      lastPlayDay: "2026-05-30",
+      repairAvailable: true,
+      nextMilestone: 14,
+      progress: 0.5,
+      milestoneJustHit: true,
+    });
+
+    const response = await request(app)
+      .get("/users/me/streak")
+      .set("Authorization", `Bearer ${authToken()}`)
+      .expect(200);
+
+    expect(response.body).toEqual({
+      streak: 7,
+      lastPlayDay: "2026-05-30",
+      repairAvailable: true,
+      nextMilestone: 14,
+      progress: 0.5,
+      milestoneJustHit: true,
+    });
+    expect(mockGetStreak).toHaveBeenCalledWith(userId);
+  });
+
+  it("POST /users/streaks/repair repairs an eligible streak", async () => {
+    mockRepairStreak.mockResolvedValue({
+      streak: 5,
+      lastPlayDay: "2026-05-30",
+      repairAvailable: false,
+      nextMilestone: 7,
+      progress: 5 / 7,
+      milestoneJustHit: false,
+    });
+
+    const response = await request(app)
+      .post("/users/streaks/repair")
+      .set("Authorization", `Bearer ${authToken()}`)
+      .expect(200);
+
+    expect(response.body.streak).toBe(5);
+    expect(response.body.repairAvailable).toBe(false);
+  });
+
   it("GET /users/me returns only safe user fields", async () => {
     mockFindUserById.mockResolvedValue(userRecord);
 
@@ -202,12 +276,7 @@ describe("users routes integration", () => {
 
     expect(response.body).toEqual({ success: true });
     expect(mockMarkPhoneVerified).toHaveBeenCalledWith(userId, phoneHash);
-    expect(mockRedisSet).toHaveBeenCalledWith(
-      `phone:hash:${phoneHash}`,
-      userId,
-      "EX",
-      86400 * 365
-    );
+    expect(mockRedisSet).toHaveBeenCalledWith(`phone:hash:${phoneHash}`, userId, "EX", 86400 * 365);
     expect(mockRedisDel).toHaveBeenCalledWith(`phone:verify:${phoneHash}`);
   });
 

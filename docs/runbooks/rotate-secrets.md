@@ -8,35 +8,36 @@
 
 ## Secret inventory
 
-| Secret | Environment variable | Store | Rotation frequency |
-|---|---|---|---|
-| JWT signing secret | `JWT_SECRET` | Docker secret / `.env` | Every 90 days or on leak |
-| JWT refresh secret | `JWT_REFRESH_SECRET` | Docker secret / `.env` | Same as `JWT_SECRET` |
-| Previous JWT secret (rotation window) | `JWT_SECRET_PREVIOUS` | Docker secret / `.env` | Cleared after 15 min post-rotation |
-| Google OAuth client secret | `GOOGLE_CLIENT_SECRET` | Docker secret / `.env` | Google-managed / on leak |
-| Stellar hot-wallet secret | `HOT_WALLET_SECRET` | Docker secret / `.env` | On leak or key compromise |
-| Stellar hot-wallet public key | `HOT_WALLET_PUBLIC_KEY` | Docker secret / `.env` | Changes with `HOT_WALLET_SECRET` |
-| MinIO / S3 access key | `S3_ACCESS_KEY` | Docker secret | Every 90 days or on leak |
-| MinIO / S3 secret key | `S3_SECRET_KEY` | Docker secret | Every 90 days or on leak |
-| Twilio auth token | `TWILIO_AUTH_TOKEN` | Docker secret / `.env` | On leak |
-| Twilio account SID | `TWILIO_ACCOUNT_SID` | Docker secret / `.env` | On leak |
-| Twilio Verify service SID | `TWILIO_SERVICE_SID` | Docker secret / `.env` | On leak |
-| Session integrity key | `SESSION_INTEGRITY_KEY` | Docker secret / `.env` | Every 90 days or on leak |
-| Webhook HMAC secret | `WEBHOOK_SECRET` | Docker secret / `.env` | On leak |
-| Slack webhook URL | `SLACK_WEBHOOK_URL` | GitHub secret | On leak |
-| SSH deploy key | `PROD_SSH_KEY` | GitHub secret | Annually |
+| Secret                                | Environment variable    | Store                  | Rotation frequency                 |
+| ------------------------------------- | ----------------------- | ---------------------- | ---------------------------------- |
+| JWT signing secret                    | `JWT_SECRET`            | Docker secret / `.env` | Every 90 days or on leak           |
+| JWT refresh secret                    | `JWT_REFRESH_SECRET`    | Docker secret / `.env` | Same as `JWT_SECRET`               |
+| Previous JWT secret (rotation window) | `JWT_SECRET_PREVIOUS`   | Docker secret / `.env` | Cleared after 15 min post-rotation |
+| Google OAuth client secret            | `GOOGLE_CLIENT_SECRET`  | Docker secret / `.env` | Google-managed / on leak           |
+| Stellar hot-wallet secret             | `HOT_WALLET_SECRET`     | Docker secret / `.env` | On leak or key compromise          |
+| Stellar hot-wallet public key         | `HOT_WALLET_PUBLIC_KEY` | Docker secret / `.env` | Changes with `HOT_WALLET_SECRET`   |
+| MinIO / S3 access key                 | `S3_ACCESS_KEY_ID`      | Docker secret          | Every 90 days or on leak           |
+| MinIO / S3 secret key                 | `S3_SECRET_ACCESS_KEY`  | Docker secret          | Every 90 days or on leak           |
+| Twilio auth token                     | `TWILIO_AUTH_TOKEN`     | Docker secret / `.env` | On leak                            |
+| Twilio account SID                    | `TWILIO_ACCOUNT_SID`    | Docker secret / `.env` | On leak                            |
+| Twilio Verify service SID             | `TWILIO_SERVICE_SID`    | Docker secret / `.env` | On leak                            |
+| Session integrity key                 | `SESSION_INTEGRITY_KEY` | Docker secret / `.env` | Every 90 days or on leak           |
+| Webhook HMAC secret                   | `WEBHOOK_SECRET`        | Docker secret / `.env` | On leak                            |
+| Slack webhook URL                     | `SLACK_WEBHOOK_URL`     | GitHub secret          | On leak                            |
+| SSH deploy key                        | `PROD_SSH_KEY`          | GitHub secret          | Annually                           |
 
 ---
 
 ## 1 — JWT secret (zero-downtime dual-verify rotation)
 
 Access tokens have a 15-minute TTL. The API supports a **dual-verify window**:
-tokens signed with the *old* secret are still accepted for 15 min after the new
+tokens signed with the _old_ secret are still accepted for 15 min after the new
 secret is deployed, preventing forced sign-outs.
 
 ### Steps
 
 1. **Generate a new secret** (≥ 32 bytes, base64-safe):
+
    ```bash
    NEW_JWT=$(openssl rand -base64 48)
    echo "$NEW_JWT"
@@ -82,6 +83,7 @@ pnpm tsx scripts/rotate-hot-wallet.ts --network public
 ```
 
 The script:
+
 1. Generates a fresh keypair.
 2. Funds the new account from the old wallet.
 3. Sweeps remaining USDC old → new.

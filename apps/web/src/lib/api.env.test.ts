@@ -14,7 +14,7 @@ describe("API Base URL validation", () => {
 
   it("should use http://localhost:3001/api when NEXT_PUBLIC_API_URL is missing in dev", async () => {
     delete process.env.NEXT_PUBLIC_API_URL;
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
     
     // We import dynamically to test the top-level evaluation
     const { api } = await import("./api");
@@ -23,7 +23,7 @@ describe("API Base URL validation", () => {
 
   it("should throw error if NEXT_PUBLIC_API_URL is missing in production", async () => {
     delete process.env.NEXT_PUBLIC_API_URL;
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     
     await expect(import("./api")).rejects.toThrow("NEXT_PUBLIC_API_URL is required in production");
   });

@@ -6,34 +6,36 @@ This document explains the canonical BrandBlitz schema, the current table relati
 
 ## Overview
 
-- `init.sql` is the canonical source for a fresh PostgreSQL schema.
-- `migrations/` contains incremental deltas for existing databases.
+- `init.sql` is a bootstrap script for fresh PostgreSQL instances.
+- `apps/api/migrations/00000-initial.sql` is the baseline schema snapshot.
+- `apps/api/migrations/` contains forward migrations plus optional rollback files.
 - `docs/db/er.svg` is auto-generated from the live schema.
 - `pnpm docs:db` regenerates the ER diagram from `DATABASE_URL` or the default local dev database.
-- CI validates that `docs/db/er.svg` is fresh for each change to `init.sql`, migrations, or docs.
+- CI validates that `docs/db/er.svg` is fresh for each change to `init.sql`, the API migrations, or docs.
 
 ## Conventions
 
 - Every table includes `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()` and `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`.
 - A shared trigger function updates `updated_at` on every row change.
-- `init.sql` should remain the single source of truth for fresh install schema.
-- `migrations/` should only contain schema deltas for existing deployments.
+- `init.sql` should remain a thin bootstrap wrapper.
+- `apps/api/migrations/` should be the source of truth for schema evolution.
 
 ## Domain ownership
 
-| Table | Ownership |
-|---|---|
-| `users` | identity / auth |
-| `brands` | brand management |
-| `challenges` | challenge lifecycle |
-| `challenge_questions` | challenge content |
-| `game_sessions` | gameplay state |
-| `session_round_scores` | gameplay scoring |
-| `payouts` | settlement / finance |
-| `fraud_flags` | anti-cheat / risk |
-| `league_assignments` | ranking / leaderboard |
-| `user_badges` | achievements |
-| `referrals` | growth / referral |
+| Table                  | Ownership             |
+| ---------------------- | --------------------- |
+| `users`                | identity / auth       |
+| `brands`               | brand management      |
+| `challenges`           | challenge lifecycle   |
+| `challenge_questions`  | challenge content     |
+| `game_sessions`        | gameplay state        |
+| `session_round_scores` | gameplay scoring      |
+| `payouts`              | settlement / finance  |
+| `fraud_flags`          | anti-cheat / risk     |
+| `league_assignments`   | ranking / leaderboard |
+| `user_badges`          | achievements          |
+| `referrals`            | growth / referral     |
+| `referral_payouts`     | growth / referral     |
 
 ## Soft delete and retention
 
@@ -52,6 +54,8 @@ This document explains the canonical BrandBlitz schema, the current table relati
   - `google_id`: unique
   - `username`: unique
   - `phone_hash`: unique
+  - `embedded_wallet_address`: optional wallet address used when a user has an embedded wallet instead of a Stellar address
+  - `referral_code`: unique 6-character invite code
   - `role`: `player` / `brand` / `admin`
   - `league`: enforced to `bronze`, `silver`, or `gold`
   - `total_score`, `total_earned_usdc`, `challenges_played`
@@ -252,12 +256,39 @@ This document explains the canonical BrandBlitz schema, the current table relati
 - Retention: referral history is retained indefinitely.
 - Domain owner: growth / referral.
 
+## referral_payouts
+
+- Purpose: track referral bonus payouts for both the referrer and the referred user.
+- Key columns
+  - `id`: PK
+  - `referral_id`: FK to `referrals(id)` with `ON DELETE CASCADE`
+  - `challenge_id`: optional FK to `challenges(id)` for bonus attribution
+  - `referrer_id`, `referred_id`
+  - `referrer_amount_stroops`, `referred_amount_stroops`
+  - `status`: `pending`, `sent`, or `failed`
+- Constraints
+  - `UNIQUE (referral_id)` ensures each referral earns at most one bonus payout row.
+- Indexes
+  - `idx_referral_payouts_referrer_id`
+  - `idx_referral_payouts_referred_id`
+  - `idx_referral_payouts_status`
+- FK semantics: rows are removed if the underlying referral or users are deleted.
+- Retention: referral bonus history is retained indefinitely.
+- Domain owner: growth / referral.
+
 ## refunds
 
-- Purpose: refund tracking is not currently defined in the repository schema.
-- Expected semantics: record refund requests, amounts, status, and related payout/deposit references.
+- Purpose: records one admin-triggered refund per challenge for audit and reconciliation.
+- Key columns
+  - `id`: PK
+  - `challenge_id`: unique FK to `challenges(id)` with `ON DELETE CASCADE`
+  - `admin_id`: admin user that initiated the refund
+  - `reason`: operator-entered refund reason
+  - `amount_stroops`: refunded USDC stroop amount
+  - `destination`: Stellar account that received the refund
+  - `tx_hash`: unique refund transaction hash
 - Soft delete: not implemented.
-- Retention: should be append-only for audit and reconciliation.
+- Retention: append-only for audit and reconciliation.
 
 ## audit_log
 

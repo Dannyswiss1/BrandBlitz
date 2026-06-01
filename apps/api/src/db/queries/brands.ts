@@ -70,7 +70,7 @@ export async function getBrandMetaById(
   id: string
 ): Promise<Pick<Brand, "id" | "owner_user_id" | "deleted_at"> | null> {
   const result = await query<Pick<Brand, "id" | "owner_user_id" | "deleted_at">>(
-    "SELECT id, owner_user_id, deleted_at FROM brands WHERE id = $1",
+    "SELECT id, owner_user_id, deleted_at FROM brands WHERE id = $1 /* include_deleted */",
     [id]
   );
   return result.rows[0] ?? null;
@@ -94,19 +94,50 @@ export async function getActiveDistractorBrands(excludeBrandId: string): Promise
   return result.rows.slice(0, 20);
 }
 
+/**
+ * Columns `updateBrand` is permitted to write. The UPDATE statement interpolates
+ * column names into its SET clause, so these identifiers MUST come from this
+ * fixed allowlist — never from caller-supplied object keys — to keep the query
+ * injection-proof (the values are already parameterised; the identifiers are
+ * what an attacker could otherwise smuggle in via a crafted key). See #113.
+ */
+const UPDATABLE_BRAND_COLUMNS = [
+  "name",
+  "logo_url",
+  "primary_color",
+  "secondary_color",
+  "tagline",
+  "brand_story",
+  "usp",
+  "product_image_1_url",
+  "product_image_2_url",
+] as const;
+
+type UpdatableBrandColumn = (typeof UPDATABLE_BRAND_COLUMNS)[number];
+
 export async function updateBrand(
   id: string,
   ownerUserId: string,
-  updates: Partial<Omit<Brand, "id" | "owner_user_id" | "created_at">>
+  updates: Partial<Pick<Brand, UpdatableBrandColumn>>
 ): Promise<Brand | null> {
   const fields = Object.keys(updates);
   if (fields.length === 0) return getBrandById(id);
 
+  // Fail closed: reject any key that is not an explicitly allowed column before
+  // it can reach the dynamically-built SET clause. Without this, a crafted key
+  // (e.g. "name = '' , deleted_at = NOW() --") would be SQL injection even
+  // though the bound values below are parameterised.
+  const allowed = new Set<string>(UPDATABLE_BRAND_COLUMNS);
+  const invalid = fields.filter((f) => !allowed.has(f));
+  if (invalid.length > 0) {
+    throw new Error(`updateBrand: disallowed column(s): ${invalid.join(", ")}`);
+  }
+
   const setClause = fields.map((f, i) => `${f} = $${i + 3}`).join(", ");
-  const values = fields.map((f) => (updates as any)[f]);
+  const values = fields.map((f) => (updates as Record<string, unknown>)[f]);
 
   const result = await query<Brand>(
-    `UPDATE brands SET ${setClause} WHERE id = $1 AND owner_user_id = $2 RETURNING *`,
+    `UPDATE brands SET ${setClause} WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL RETURNING *`,
     [id, ownerUserId, ...values]
   );
   return result.rows[0] ?? null;

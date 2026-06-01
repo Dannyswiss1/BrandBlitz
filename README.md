@@ -32,6 +32,7 @@
 - [Workspace Scripts](#workspace-scripts)
 - [Packages](#packages)
 - [Further Reading](#further-reading)
+- [Operations Runbooks](#operations-runbooks)
 
 ---
 
@@ -259,7 +260,8 @@ brandblitz/
 ├── docker-compose.yml             8 services: web, api, worker, postgres,
 ├── docker-compose.override.yml    redis, nginx, minio, minio-setup
 ├── docker-compose.prod.yml
-├── init.sql          Full PostgreSQL schema (10 tables, indices, triggers)
+├── init.sql          Bootstrap entrypoint for the Postgres schema
+├── apps/api/migrations/  Baseline snapshot + forward migration files
 └── .env.example      All required environment variables with documentation
 ```
 
@@ -308,6 +310,9 @@ cp .env.example .env
 # Start all 8 services (hot-reload enabled in dev)
 docker compose up --build
 
+# API container applies pending migrations before starting the watcher
+# (use SEED_DEV=1 to seed after migrations)
+
 # Verify
 open http://localhost              # Next.js frontend
 curl http://localhost/api/health   # {"status":"ok"}
@@ -332,6 +337,50 @@ pnpm dev  # Turborepo runs all packages in parallel
 
 ---
 
+## Running Migrations
+
+```bash
+# Apply any pending API migrations
+pnpm --filter @brandblitz/api migrate
+
+# Check whether the database is already up to date
+pnpm --filter @brandblitz/api migrate:dryrun
+```
+
+`init.sql` is a bootstrap wrapper for fresh databases. The canonical schema
+snapshot is `apps/api/migrations/00000-initial.sql`, and new schema changes
+should land as forward migrations in `apps/api/migrations/`.
+
+---
+
+## Local Dev — Seed Data
+
+Starting from an empty database makes it hard to exercise any game flow. The seed script creates deterministic local fixtures so you can click through every page immediately.
+
+```bash
+# Seed once (idempotent — safe to re-run)
+pnpm --filter @brandblitz/api seed
+
+# Reset and re-seed from scratch
+pnpm --filter @brandblitz/api seed -- --reset
+```
+
+What it creates:
+- **50 users** — 1 admin (`seed-admin@brandblitz.test`), 3 brand owners, 46 players with varied leagues
+- **3 brands** — Stellar Pay, NovaMint, AetherShop (with logo fixtures at `apps/api/scripts/fixtures/logos/`)
+- **6 challenges** — 2 active, 2 completed, 2 draft (2 per brand)
+- **200 game sessions** — mix of completed and flagged (≈10% flagged, including fraud flags)
+
+**Auto-seed on `docker compose up`:**
+
+```bash
+SEED_DEV=1 docker compose up
+```
+
+Set `SEED_DEV=1` in your shell or `.env` and the API container will run the seed script before starting. This is a no-op if fixtures already exist.
+
+---
+
 ## Environment Variables
 
 See [`.env.example`](./.env.example) for all variables with inline documentation. Minimum to get running:
@@ -349,6 +398,7 @@ See [`.env.example`](./.env.example) for all variables with inline documentation
 | `S3_*` | Storage endpoint, credentials, bucket (`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) |
 | `WEBHOOK_SECRET` | Protects `/webhooks/stellar` |
 | `PHONE_HASH_SALT` | HMAC salt for phone-number hashing (32-byte random) |
+| `SESSION_INTEGRITY_KEY` | HMAC key for session tamper-detection — generate with `openssl rand -hex 32` |
 | `NEXTAUTH_API_URL` | Internal URL next-auth uses to reach the API (e.g. `http://localhost/api`) |
 
 ---
@@ -609,3 +659,22 @@ S3-compatible object storage with image optimisation. Imported by `apps/api`. Wo
 - [`apps/api/README.md`](./apps/api/README.md) — Full API reference, all routes, middleware, services, database schema
 - [`apps/web/README.md`](./apps/web/README.md) — Frontend pages, components, auth flow, game state machine, upload flow
 - [`contracts/README.md`](./contracts/README.md) — Soroban escrow contract: build, test, deploy, full function reference
+- [`docs/adr/`](./docs/adr/README.md) — Architecture Decision Records (the "why" behind load-bearing engineering choices)
+- Interactive API reference — Scalar UI at `/docs` (local dev: <http://localhost:4000/docs>). Spec lives at [`docs/openapi.yml`](./docs/openapi.yml); regenerate via `pnpm --filter @brandblitz/api gen:openapi`.
+
+---
+
+## Operations Runbooks
+
+Incident-response playbooks for on-call engineers live in [`docs/runbooks/`](./docs/runbooks/README.md).
+
+| Runbook | Summary |
+|---|---|
+| [horizon-outage](./docs/runbooks/horizon-outage.md) | Stellar Horizon degraded — payout queue paused |
+| [hot-wallet-low-balance](./docs/runbooks/hot-wallet-low-balance.md) | USDC balance too low to process payouts |
+| [payout-stuck-in-queue](./docs/runbooks/payout-stuck-in-queue.md) | BullMQ payout jobs not progressing |
+| [leaked-secret](./docs/runbooks/leaked-secret.md) | Secret exposed in git or logs |
+| [cdn-purge](./docs/runbooks/cdn-purge.md) | Force-invalidate a cached asset |
+| [rotate-secrets](./docs/runbooks/rotate-secrets.md) | General secret rotation |
+
+See [docs/runbooks/README.md](./docs/runbooks/README.md) for the full index.
