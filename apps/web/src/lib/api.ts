@@ -86,6 +86,7 @@ export interface LeaderboardEntry {
 }
 
 export interface UserProfile {
+  userId?: string;
   displayName: string;
   username: string;
   league: "bronze" | "silver" | "gold" | null;

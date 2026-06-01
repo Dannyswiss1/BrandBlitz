@@ -3,11 +3,21 @@
 import * as React from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { WarmupPhase } from "@/components/game/warmup-phase";
-import { ChallengeRound } from "@/components/game/challenge-round";
-import { ResultScreen } from "@/components/game/result-screen";
+import dynamic from "next/dynamic";
 import { createApiClient, type Challenge, type ChallengeQuestion } from "@/lib/api";
 import { TOTAL_ROUNDS } from "@/components/game/constants";
+
+const WarmupPhase = dynamic(() => import("@/components/game/warmup-phase").then((m) => m.WarmupPhase), {
+  loading: () => <div className="min-h-screen flex items-center justify-center">Loading warmup...</div>,
+});
+
+const ChallengeRound = dynamic(() => import("@/components/game/challenge-round").then((m) => m.ChallengeRound), {
+  loading: () => <div className="min-h-screen flex items-center justify-center">Loading round...</div>,
+});
+
+const ResultScreen = dynamic(() => import("@/components/game/result-screen").then((m) => m.ResultScreen), {
+  loading: () => <div className="min-h-screen flex items-center justify-center">Preparing results...</div>,
+});
 
 type GamePhase = "loading" | "warmup" | "challenge" | "result";
 
@@ -55,7 +65,7 @@ export function ChallengePage({ params }: Props) {
     setCurrentRound(1);
   };
 
-  const handleAnswer = async (option: "A" | "B" | "C" | "D", reactionTimeMs: number) => {
+  const handleAnswer = async (option: "A" | "B" | "C" | "D" | null, reactionTimeMs: number) => {
     const apiToken = (session as any)?.apiToken as string;
     const api = createApiClient(apiToken);
     const res = await api.post(`/sessions/${challengeId}/answer/${currentRound}`, { selectedOption: option, reactionTimeMs });
@@ -74,7 +84,15 @@ export function ChallengePage({ params }: Props) {
       </div>
     );
   }
-  if (phase === "warmup" && challenge) return <WarmupPhase challenge={challenge} onComplete={handleWarmupComplete} />;
+  if (phase === "warmup" && challenge) {
+    return (
+      <WarmupPhase
+        challenge={challenge}
+        apiToken={(session as any).apiToken as string}
+        onComplete={handleWarmupComplete}
+      />
+    );
+  }
   if (phase === "challenge" && challenge) {
     const question = questions[currentRound - 1];
     if (!question) return null;

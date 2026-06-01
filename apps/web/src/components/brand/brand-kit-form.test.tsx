@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrandKitForm } from "./brand-kit-form";
@@ -45,9 +45,12 @@ vi.mock("./upload-field", () => ({
         const nextCount = count + 1;
         (globalThis as any).__productUploadCount = nextCount;
         onUploaded(`product-key-${nextCount}`, `https://cdn.example/product-${nextCount}.webp`);
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BrandKitForm } from "./brand-kit-form";
+      }}
+    >
+      Upload {label}
+    </button>
+  ),
+}));
 
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),

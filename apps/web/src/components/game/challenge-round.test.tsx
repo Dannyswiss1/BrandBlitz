@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
-import { ChallengeRound } from "./challenge-round";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ChallengeRound } from "./challenge-round";
 import { ROUND_SECONDS } from "./constants";
 import type { ChallengeQuestion } from "@/lib/api";
@@ -75,6 +73,8 @@ describe("ChallengeRound", () => {
     expect(onAnswer).toHaveBeenCalledTimes(1);
     expect(onAnswer).toHaveBeenCalledWith(null, 15_000);
     expect(onAnswer).not.toHaveBeenCalledWith("A", expect.any(Number));
+  });
+
   it("renders the question prompt and all 4 options", () => {
     const onAnswer = vi.fn();
     render(<ChallengeRound question={buildQuestion()} round={1} onAnswer={onAnswer} />);
@@ -119,7 +119,7 @@ describe("ChallengeRound", () => {
     expect(onAnswer).toHaveBeenCalledWith("A", expect.any(Number));
   });
 
-  it("timer reaching 0 calls onAnswer with sentinel default option A and rtMs = ROUND_SECONDS * 1000", () => {
+  it("timer reaching 0 calls onAnswer with null option and rtMs = ROUND_SECONDS * 1000", () => {
     const onAnswer = vi.fn();
     render(<ChallengeRound question={buildQuestion()} round={1} onAnswer={onAnswer} />);
 
@@ -127,7 +127,7 @@ describe("ChallengeRound", () => {
     capturedOnExpire!();
 
     expect(onAnswer).toHaveBeenCalledTimes(1);
-    expect(onAnswer).toHaveBeenCalledWith("A", ROUND_SECONDS * 1000);
+    expect(onAnswer).toHaveBeenCalledWith(null, ROUND_SECONDS * 1000);
   });
 
   it("timer expiry does not fire if user already answered", () => {

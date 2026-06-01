@@ -1,0 +1,24 @@
+Bundle Baseline Report
+======================
+File                                                         |       Size |       Gzip
+-------------------------------------------------------------------------------------
+9304.cb38e2ec68c55a48.js                                     |     451984 |     148159
+e30e9c4d-ec295515a1ba2401.js                                 |     199870 |      62883
+1130-0580cb9067241cef.js                                     |     221945 |      60338
+framework-09a48d9447565863.js                                |     189699 |      59967
+polyfills-42372ed130431b0a.js                                |     112594 |      39627
+main-1a0a3c78c8815a37.js                                     |     137178 |      39560
+9d90baa1.bc3a4276b0f58698.js                                 |     123706 |      39048
+6706-0997b7f3c9b3a20c.js                                     |      99522 |      26030
+7812-17255dbc3bd89e55.js                                     |      61346 |      22224
+8746-4b85a82726627b1a.js                                     |      62317 |      21587
+3214-11b0e61e39f04194.js                                     |      32753 |      11388
+4870-710da2ea05266dd0.js                                     |      33591 |       9285
+4856-bf502f0a3eda85ef.js                                     |      31819 |       9033
+9941-5c953f8f88dea176.js                                     |      14067 |       5448
+app/(brand)/brand/new/page-b7ca99039624a866.js               |      15672 |       5165
+app/(brand)/brand/[id]/page-1cc14a4d2d520088.js              |      13204 |       4669
+app/admin/fraud/page-0bdec35d997e57b0.js                     |      14782 |       4587
+app/leaderboard/page-0668a7b2c87e83ac.js                     |      10494 |       3788
+2575.e7e81ba9c5931c0d.js                                     |       8704 |       3690
+app/(brand)/dashboard/page-1712044abbe80b1f.js               |      10517 |       3690

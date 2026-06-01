@@ -77,7 +77,7 @@ const FormSchema = z.object({
 
     const validationResult = FormSchema.safeParse(fields);
     if (!validationResult.success) {
-      setError(validationResult.error.errors.map(err => err.message).join(", "));
+      setError(validationResult.error.issues.map(err => err.message).join(", "));
       return;
     }
 

@@ -1,7 +1,7 @@
 import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatScore, formatUsdc } from "@/lib/utils";
+import { formatScore, formatUsdc } from "@/lib/format";
 import { StreakBadge } from "@/components/gamification/streak-badge";
 import { notFound } from "next/navigation";
 import Link from "next/link";
@@ -61,7 +61,11 @@ export default async function ProfilePage({ params }: ProfilePageProps) {
 
   if (!user) notFound();
 
+  const badges = user.userId ? await getUserBadges(user.userId) : [];
+  const earnedIds = badges.filter((b) => b.earned).map((b) => b.id);
+
   const streak = user.streak ?? 0;
+  const recentSessions = user.recentSessions ?? [];
   const milestones = [3, 7, 14, 30];
   const nextMilestone =
     milestones.find((m) => m > streak) ?? milestones[milestones.length - 1];

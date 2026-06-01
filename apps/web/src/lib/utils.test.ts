@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as fc from "fast-check";
-import { formatUsdc } from "./utils";
+import { formatUsdc } from "./format";
 
 describe("formatUsdc", () => {
   it("formats a whole number with 2 decimals by default", () => {

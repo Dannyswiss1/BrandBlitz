@@ -8,7 +8,7 @@ import Image from "next/image";
 import { createApiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatUsdc } from "@/lib/utils";
+import { formatUsdc } from "@/lib/format";
 import type { LeaderboardEntry } from "@/lib/api";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LiveChallengeLeaderboard } from "@/components/leaderboard/live-challenge-leaderboard";

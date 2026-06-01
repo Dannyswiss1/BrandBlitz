@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
-import { formatScore, formatUsdc } from "@/lib/utils";
+import { formatScore, formatUsdc } from "@/lib/format";
 import type { LeaderboardEntry } from "@/lib/api";
 
 const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };

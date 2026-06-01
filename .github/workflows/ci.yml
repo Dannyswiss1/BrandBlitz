@@ -92,6 +92,27 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @brandblitz/storage test
 
+  bundle-analysis:
+    name: Web Bundle Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build Web
+        working-directory: apps/web
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost/api
+      - name: Check Bundle Budget
+        run: node scripts/check-bundle-budget.mjs
+
   # ── Build + source-map upload (Sentry) ──────────────────────────────────────
   build:
     name: Build & upload source maps

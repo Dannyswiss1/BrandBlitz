@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatScore } from "@/lib/utils";
+import { formatScore } from "@/lib/format";
 import type { LeaderboardEntry } from "@/lib/api";
 import { useLiveLeaderboard } from "@/hooks/use-live-leaderboard";
 

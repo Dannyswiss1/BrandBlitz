@@ -33,6 +33,7 @@ const challenge: Challenge = {
   brand_id: "brand-123",
   challenge_id: "challenge-123",
   pool_amount_usdc: "250",
+  pool_amount_stroops: "2500000000",
   status: "active",
   starts_at: "2026-04-24T00:00:00.000Z",
   ends_at: "2026-04-25T00:00:00.000Z",

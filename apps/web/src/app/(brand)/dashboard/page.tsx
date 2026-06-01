@@ -9,7 +9,7 @@ import { createApiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatUsdc } from "@/lib/utils";
+import { formatUsdc } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/lib/toast";
 
