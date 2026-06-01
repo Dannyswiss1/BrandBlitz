@@ -1,6 +1,6 @@
 import { Queue, Worker } from "bullmq";
 import { redis } from "../lib/redis";
-import { query } from "../db";
+import { pool } from "../db";
 import { logger } from "../lib/logger";
 
 export const archiveQueue = new Queue("archive", {
@@ -19,35 +19,74 @@ export async function scheduleArchiveJob(): Promise<void> {
   );
 }
 
+/** Challenges eligible for archival: settled and ended more than 90 days ago. */
+const ARCHIVE_PREDICATE = `status = 'settled' AND ended_at < NOW() - INTERVAL '90 days'`;
+
 export function createArchiveWorker(): Worker {
   return new Worker(
     "archive",
     async () => {
       logger.info("Running monthly archive job");
-      await query(`
-        WITH moved_sessions AS (
-          DELETE FROM game_sessions
-          WHERE challenge_id IN (
-            SELECT id FROM challenges
-            WHERE status = 'settled'
-              AND ended_at < NOW() - INTERVAL '90 days'
-              /* include_deleted */
+
+      // Run the whole archival inside one transaction so the child round-score
+      // deletions and the parent session/challenge moves either all commit or
+      // all roll back together.
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        // 1. Collect the ids of every session about to be archived/deleted.
+        const sessionRows = await client.query<{ id: string }>(
+          `SELECT id FROM game_sessions
+            WHERE challenge_id IN (SELECT id FROM challenges WHERE ${ARCHIVE_PREDICATE})`,
+        );
+        const sessionIds = sessionRows.rows.map((r) => r.id);
+
+        // 2. Delete child session_round_scores rows BEFORE their parent
+        //    game_sessions rows so referential integrity is respected even if
+        //    the FK cascade is ever removed. This is the leak the archive job
+        //    previously left behind.
+        let deletedRoundScores = 0;
+        if (sessionIds.length > 0) {
+          const scoreResult = await client.query(
+            `DELETE FROM session_round_scores WHERE session_id = ANY($1::uuid[])`,
+            [sessionIds],
+          );
+          deletedRoundScores = scoreResult.rowCount ?? 0;
+        }
+
+        // 3. Archive + delete the sessions, then the challenges.
+        await client.query(`
+          WITH moved_sessions AS (
+            DELETE FROM game_sessions
+            WHERE challenge_id IN (SELECT id FROM challenges WHERE ${ARCHIVE_PREDICATE})
+            RETURNING *
+          ),
+          archived_sessions AS (
+            INSERT INTO game_sessions_archive SELECT * FROM moved_sessions RETURNING id
+          ),
+          moved_challenges AS (
+            DELETE FROM challenges
+            WHERE ${ARCHIVE_PREDICATE}
+            RETURNING *
           )
-          RETURNING *
-        ),
-        archived_sessions AS (
-          INSERT INTO game_sessions_archive SELECT * FROM moved_sessions RETURNING id
-        ),
-        moved_challenges AS (
-          DELETE FROM challenges
-          WHERE status = 'settled'
-            AND ended_at < NOW() - INTERVAL '90 days'
-            /* include_deleted */
-          RETURNING *
-        )
-        INSERT INTO challenges_archive SELECT * FROM moved_challenges
-      `);
-      logger.info("Monthly archive job completed");
+          INSERT INTO challenges_archive SELECT * FROM moved_challenges
+        `);
+
+        await client.query("COMMIT");
+        logger.info("Monthly archive job completed", {
+          archivedSessions: sessionIds.length,
+          deletedRoundScores,
+        });
+      } catch (err) {
+        await client.query("ROLLBACK");
+        logger.error("Monthly archive job failed — transaction rolled back", {
+          error: (err as Error).message,
+        });
+        throw err;
+      } finally {
+        client.release();
+      }
     },
     { connection: redis }
   );

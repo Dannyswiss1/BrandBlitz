@@ -42,6 +42,14 @@ export function validateAnswer(
 /**
  * Calculate payout amount for a winner based on their share of total points.
  * Returns 7-decimal USDC amount as string (Stellar convention).
+ *
+ * Round-score aggregation upstream uses `COALESCE(SUM(score), 0)` (see
+ * db/queries/sessions.ts), so sessions whose `session_round_scores` rows are
+ * absent — e.g. archived/pruned challenges — contribute a score of 0 rather
+ * than producing NULLs. `calculatePayoutShareStroops` additionally guards
+ * `totalPointsAllUsers === 0`, so a fully-empty scoreboard yields a 0 share
+ * instead of a divide-by-zero. Missing round scores are therefore handled
+ * gracefully end to end.
  */
 export function calculatePayoutShare(
   userScore: number,
