@@ -1,4 +1,8 @@
-import { submitBatchPayout, type PayoutRecipient } from "@brandblitz/stellar";
+import {
+  isRetriableStellarError,
+  submitBatchPayout,
+  type PayoutRecipient,
+} from "@brandblitz/stellar";
 import type { NetworkName } from "@brandblitz/stellar";
 import { getLeaderboard } from "../db/queries/sessions";
 import { getChallengeById, updateChallengeStatus } from "../db/queries/challenges";
@@ -95,12 +99,35 @@ export async function processPayout(challengeId: string): Promise<void> {
   }
 
   const network = config.STELLAR_NETWORK as NetworkName;
-  const results = await submitBatchPayout(
-    recipients,
-    config.HOT_WALLET_SECRET,
-    challengeId,
-    network
-  );
+  let results;
+  try {
+    results = await submitBatchPayout(
+      recipients,
+      config.HOT_WALLET_SECRET,
+      challengeId,
+      network,
+      {
+        onInvalidRecipient: (recipient, reason) => {
+          logger.error("Invalid payout recipient skipped", {
+            challengeId,
+            address: recipient.address,
+            amount: recipient.amount,
+            reason,
+          });
+        },
+      }
+    );
+  } catch (error) {
+    if (isRetriableStellarError(error)) {
+      logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    throw error;
+  }
 
   const txHashes: string[] = [];
   let hasFailure = false;
@@ -114,7 +141,12 @@ export async function processPayout(challengeId: string): Promise<void> {
     for (const recipient of result.recipients) {
       const record = payoutRecords.find((candidate) => candidate.address === recipient.address);
       if (record) {
-        await updatePayoutStatus(record.id, status, result.txHash || undefined);
+        await updatePayoutStatus(
+          record.id,
+          status,
+          result.txHash || undefined,
+          result.success ? undefined : result.error
+        );
       }
     }
 

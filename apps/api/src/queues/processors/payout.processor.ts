@@ -2,6 +2,9 @@ import { Worker, type Job, type WorkerOptions } from "bullmq";
 import { redis } from "../../lib/redis";
 import { processPayout } from "../../services/payout";
 import { logger } from "../../lib/logger";
+import { failPayoutsForChallenge } from "../../db/queries/payouts";
+import { query } from "../../db";
+import { payoutJobOptions } from "../payout.queue";
 
 export const PAYOUT_WORKER_CONCURRENCY = parseInt(
   process.env.PAYOUT_WORKER_CONCURRENCY ?? "2",
@@ -35,7 +38,37 @@ export function createPayoutWorker(WorkerImpl: typeof Worker = Worker): Worker {
       error: err.message,
       attempts: job?.attemptsMade,
     });
+
+    if (job && (job.attemptsMade ?? 0) >= (payoutJobOptions.attempts ?? 1)) {
+      handleExhaustedPayoutJob(job, err).catch((auditError) => {
+        logger.error("Failed to persist exhausted payout job state", {
+          jobId: job.id,
+          error: auditError instanceof Error ? auditError.message : String(auditError),
+        });
+      });
+    }
   });
 
   return worker;
+}
+
+export async function handleExhaustedPayoutJob(
+  job: Job<{ challengeId: string }>,
+  err: Error
+): Promise<void> {
+  await failPayoutsForChallenge(job.data.challengeId, err.message);
+  await query(
+    `INSERT INTO audit_log (action, entity_type, entity_id, metadata)
+     VALUES ($1, $2, $3, $4::jsonb)`,
+    [
+      "payout_failed",
+      "challenge",
+      job.data.challengeId,
+      JSON.stringify({
+        jobId: job.id,
+        attemptsMade: job.attemptsMade,
+        error: err.message,
+      }),
+    ]
+  );
 }

@@ -4,22 +4,40 @@ import express from "express";
 import sessionsRouter from "./sessions";
 import { errorHandler } from "../middleware/error";
 
+const testState = vi.hoisted(() => ({
+  revokedTokens: new Set<string>(),
+}));
+
 // Mock dependencies
 vi.mock("../db/queries/challenges");
 vi.mock("../db/queries/sessions");
 vi.mock("../services/scoring");
 vi.mock("../lib/redis", () => ({
   redis: {
-    set: vi.fn(),
+    set: vi.fn((key: string) => {
+      if (key.startsWith("auth:revoked:")) {
+        testState.revokedTokens.add(key);
+      }
+      return Promise.resolve("OK");
+    }),
     get: vi.fn(),
     del: vi.fn(),
   },
 }));
 vi.mock("../middleware/authenticate", () => ({
   authenticate: (req: any, res: any, next: any) => {
-    req.user = { sub: "user123", email: "test@example.com" };
+    const token = req.headers.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7)
+      : null;
+    if (token && testState.revokedTokens.has(`auth:revoked:${token}`)) {
+      res.status(401).json({ error: "Invalid or expired token" });
+      return;
+    }
+    req.user = { sub: "user123", email: "test@example.com", iat: 1, exp: 9999999999 };
     next();
   },
+  tokenRevocationKey: (token: string) => `auth:revoked:${token}`,
+  tokenTtlSeconds: () => 600,
 }));
 vi.mock("../middleware/anti-cheat", () => ({
   enforceOneSessionPerChallenge: (req: any, res: any, next: any) => next(),
@@ -43,6 +61,7 @@ app.use(errorHandler);
 describe("Sessions API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testState.revokedTokens.clear();
   });
 
   describe("POST /sessions/:challengeId/warmup-start", () => {
@@ -98,10 +117,12 @@ describe("Sessions API", () => {
 
       const res = await request(app)
         .post("/sessions/c1/start")
+        .set("Authorization", "Bearer active-jwt")
         .send({ challengeToken: "valid-token" });
 
       expect(res.status).toBe(200);
       expect(sessionQueries.markChallengeStarted).toHaveBeenCalledWith("s1");
+      expect(redis.set).toHaveBeenCalledWith("session-token:s1", "active-jwt", "EX", 600);
     });
 
     it("should 401 if invalid token", async () => {
@@ -179,10 +200,45 @@ describe("Sessions API", () => {
 
       const res = await request(app)
         .post("/sessions/c1/answer/3")
+        .set("Authorization", "Bearer completed-jwt")
         .send({ selectedOption: "B", reactionTimeMs: 400 });
 
       expect(res.status).toBe(200);
       expect(sessionQueries.finishSession).toHaveBeenCalledWith("s1");
+      expect(redis.del).toHaveBeenCalledWith("session-token:s1");
+      expect(redis.del).toHaveBeenCalledWith("session:start:s1");
+      expect(redis.set).toHaveBeenCalledWith(
+        "auth:revoked:completed-jwt",
+        "1",
+        "EX",
+        600
+      );
+    });
+
+    it("rejects a replayed answer request after completion revokes the token", async () => {
+      (challengeQueries.getChallengeById as any).mockResolvedValue({ id: "c1" });
+      (sessionQueries.getSession as any).mockResolvedValue({
+        id: "s1",
+        user_id: "user123",
+        challenge_started_at: new Date(),
+      });
+      (challengeQueries.getChallengeQuestions as any).mockResolvedValue([
+        { round: 3, correct_option: "B" },
+      ]);
+
+      const first = await request(app)
+        .post("/sessions/c1/answer/3")
+        .set("Authorization", "Bearer replay-jwt")
+        .send({ selectedOption: "B", reactionTimeMs: 400 });
+
+      expect(first.status).toBe(200);
+
+      const replay = await request(app)
+        .post("/sessions/c1/answer/3")
+        .set("Authorization", "Bearer replay-jwt")
+        .send({ selectedOption: "B", reactionTimeMs: 400 });
+
+      expect(replay.status).toBe(401);
     });
 
     it("should 409 if session already completed", async () => {

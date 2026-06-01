@@ -19,7 +19,10 @@ vi.mock("../db/queries/challenges", () => ({
 }));
 
 vi.mock("../db/queries/sessions", () => ({
-  getLeaderboard: mocks.getLeaderboard,
+  getLeaderboard: (...args: unknown[]) => {
+    mocks.dbQueryCount.value++;
+    return mocks.getLeaderboard(...args);
+  },
   getTopSessionsPerChallenge: (...args: unknown[]) => {
     mocks.dbQueryCount.value++;
     return mocks.getTopSessionsPerChallenge(...args);
@@ -154,6 +157,7 @@ describe("GET /leaderboard/global", () => {
 describe("GET /leaderboard/:challengeId", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.dbQueryCount.value = 0;
     mocks.getLeaderboard.mockResolvedValue([
       { id: "s1", user_id: "u1", challenge_id: "c1", username: "alice", avatar_url: null, total_score: 500 },
       { id: "s2", user_id: "u2", challenge_id: "c1", username: "bob",   avatar_url: null, total_score: 400 },
@@ -176,5 +180,23 @@ describe("GET /leaderboard/:challengeId", () => {
       .query({ limit: 5, offset: 10 });
 
     expect(mocks.getLeaderboard).toHaveBeenCalledWith("c1", 5, 10);
+  });
+
+  it("issues exactly one leaderboard query regardless of participant count", async () => {
+    mocks.getLeaderboard.mockResolvedValue(
+      Array.from({ length: 500 }, (_, index) => ({
+        id: `s${index}`,
+        user_id: `u${index}`,
+        challenge_id: "c1",
+        username: `user${index}`,
+        avatar_url: null,
+        total_score: 500 - index,
+      }))
+    );
+
+    const res = await request(createApp()).get("/leaderboard/c1");
+
+    expect(res.status).toBe(200);
+    expect(mocks.dbQueryCount.value).toBe(1);
   });
 });

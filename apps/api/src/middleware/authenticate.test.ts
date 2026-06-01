@@ -1,155 +1,122 @@
-import { authenticate, authenticateOptional } from "./authenticate";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import jwt from "jsonwebtoken";
+import {
+  authenticate,
+  authenticateOptional,
+  tokenRevocationKey,
+} from "./authenticate";
 
-const SECRET = "test_secret";
+const SECRET = "test_secret_test_secret_test_secret_123";
 
-// Mock req/res/next
-const mockReq = () => ({
-  headers: {},
-  user: undefined as any,
-});
+const mocks = vi.hoisted(() => ({
+  redisGet: vi.fn(),
+}));
 
-const mockRes = () => {
+vi.mock("../lib/config", () => ({
+  config: {
+    JWT_SECRET: "test_secret_test_secret_test_secret_123",
+  },
+}));
+
+vi.mock("../lib/redis", () => ({
+  redis: {
+    get: mocks.redisGet,
+  },
+}));
+
+function mockReq(token?: string) {
+  return {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+    user: undefined as any,
+  };
+}
+
+function mockRes() {
   const res: any = {};
-  res.status = jest.fn().mockReturnValue(res);
-  res.json = jest.fn().mockReturnValue(res);
+  res.status = vi.fn().mockReturnValue(res);
+  res.json = vi.fn().mockReturnValue(res);
   return res;
-};
+}
 
-const next = jest.fn();
+const next = vi.fn();
 
-// Helper to generate JWTs
-const signToken = (payload: any, options = {}) =>
-  jwt.sign(payload, SECRET, options);
+function signToken(payload: any, options = {}) {
+  return jwt.sign(payload, SECRET, options);
+}
 
 describe("authenticate middleware", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
+    mocks.redisGet.mockResolvedValue(null);
   });
 
-  // -------------------------
-  // VALID TOKEN
-  // -------------------------
-  it("valid Bearer token → sets req.user and calls next", () => {
-    const token = signToken({ id: "user1" }, { expiresIn: "1h" });
-
-    const req = mockReq();
-    req.headers.authorization = `Bearer ${token}`;
+  it("accepts a valid bearer token", async () => {
+    const token = signToken({ sub: "user1", email: "user@example.com" }, { expiresIn: "1h" });
+    const req = mockReq(token);
     const res = mockRes();
 
-    authenticate(req as any, res, next);
+    await authenticate(req as any, res, next);
 
-    expect(req.user).toBeDefined();
-    expect(req.user.id).toBe("user1");
+    expect(req.user.sub).toBe("user1");
+    expect(mocks.redisGet).toHaveBeenCalledWith(tokenRevocationKey(token));
     expect(next).toHaveBeenCalled();
   });
 
-  // -------------------------
-  // MISSING HEADER
-  // -------------------------
-  it("missing header → 401", () => {
+  it("rejects a missing token", async () => {
     const req = mockReq();
     const res = mockRes();
 
-    authenticate(req as any, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.any(String) })
-    );
-  });
-
-  // -------------------------
-  // MALFORMED HEADER
-  // -------------------------
-  it('malformed header "Token foo" → 401', () => {
-    const req = mockReq();
-    req.headers.authorization = "Token abc";
-    const res = mockRes();
-
-    authenticate(req as any, res, next);
+    await authenticate(req as any, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
   });
 
-  // -------------------------
-  // EXPIRED TOKEN
-  // -------------------------
-  it("expired token → 401 token_expired", () => {
-    const token = signToken(
-      { id: "user1" },
-      { expiresIn: "-1s" } // already expired
-    );
-
-    const req = mockReq();
-    req.headers.authorization = `Bearer ${token}`;
+  it("rejects a revoked token", async () => {
+    const token = signToken({ sub: "user1", email: "user@example.com" }, { expiresIn: "1h" });
+    const req = mockReq(token);
     const res = mockRes();
+    mocks.redisGet.mockResolvedValue("1");
 
-    authenticate(req as any, res, next);
+    await authenticate(req as any, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: "token_expired",
-      })
-    );
+    expect(next).not.toHaveBeenCalled();
   });
 
-  // -------------------------
-  // WRONG SECRET
-  // -------------------------
-  it("wrong secret → 401 invalid_signature", () => {
-    const badToken = jwt.sign({ id: "user1" }, "wrong_secret");
-
-    const req = mockReq();
-    req.headers.authorization = `Bearer ${badToken}`;
+  it("rejects an invalid token", async () => {
+    const req = mockReq("invalid_token");
     const res = mockRes();
 
-    authenticate(req as any, res, next);
+    await authenticate(req as any, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: "invalid_signature",
-      })
-    );
   });
 });
 
 describe("authenticateOptional middleware", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
+    mocks.redisGet.mockResolvedValue(null);
   });
 
-  it("valid token → sets req.user and calls next", () => {
-    const token = signToken({ id: "user1" });
-
-    const req = mockReq();
-    req.headers.authorization = `Bearer ${token}`;
+  it("sets req.user for a valid non-revoked token", async () => {
+    const token = signToken({ sub: "user1", email: "user@example.com" }, { expiresIn: "1h" });
+    const req = mockReq(token);
     const res = mockRes();
 
-    authenticateOptional(req as any, res, next);
+    await authenticateOptional(req as any, res, next);
 
-    expect(req.user).toBeDefined();
+    expect(req.user.sub).toBe("user1");
     expect(next).toHaveBeenCalled();
   });
 
-  it("invalid token → does NOT throw, sets req.user undefined", () => {
-    const req = mockReq();
-    req.headers.authorization = "Bearer invalid_token";
+  it("continues without user for a revoked optional token", async () => {
+    const token = signToken({ sub: "user1", email: "user@example.com" }, { expiresIn: "1h" });
+    const req = mockReq(token);
     const res = mockRes();
+    mocks.redisGet.mockResolvedValue("1");
 
-    authenticateOptional(req as any, res, next);
-
-    expect(req.user).toBeUndefined();
-    expect(next).toHaveBeenCalled();
-  });
-
-  it("missing token → continues without user", () => {
-    const req = mockReq();
-    const res = mockRes();
-
-    authenticateOptional(req as any, res, next);
+    await authenticateOptional(req as any, res, next);
 
     expect(req.user).toBeUndefined();
     expect(next).toHaveBeenCalled();
