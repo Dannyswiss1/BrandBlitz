@@ -72,9 +72,52 @@ app.use(
     },
   }),
 );
+// ── CORS — explicit, non-wildcard allow-list enforced at startup ────────────
+// `config.ALLOWED_ORIGINS` is validated by Zod (required, no wildcard) so the
+// process never starts with a permissive origin list. This defensive guard
+// re-asserts that invariant at the middleware layer.
+const allowedOrigins = config.ALLOWED_ORIGINS;
+if (allowedOrigins.length === 0 || allowedOrigins.includes("*")) {
+  throw new Error(
+    "ALLOWED_ORIGINS must be an explicit, non-wildcard list of origins",
+  );
+}
+
+// ALLOWED_ORIGINS entries may be full URLs ("http://localhost:3000") or
+// host[:port] ("localhost:3000") — the latter form is shared with the web
+// app's Next.js Server Actions config. Browser Origin headers always carry a
+// scheme, so we compare on a scheme-stripped host to accept either form.
+const stripScheme = (value: string): string =>
+  value.replace(/^https?:\/\//, "");
+const allowedOriginHosts = new Set(allowedOrigins.map(stripScheme));
+const isOriginAllowed = (origin: string): boolean =>
+  allowedOrigins.includes(origin) || allowedOriginHosts.has(stripScheme(origin));
+
+// Reject cross-origin requests from unlisted origins with HTTP 403 BEFORE the
+// CORS reflection runs. Requests without an Origin header (same-origin
+// navigations, server-to-server, health checks) are allowed through.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && !isOriginAllowed(origin)) {
+    res.status(403).json({
+      error: "Origin not allowed by CORS",
+      code: "CORS_ORIGIN_FORBIDDEN",
+    });
+    return;
+  }
+  next();
+});
 app.use(
   cors({
-    origin: config.WEB_URL,
+    origin(origin, callback) {
+      // No Origin header → non-browser / same-origin request; allow.
+      if (!origin || isOriginAllowed(origin)) {
+        callback(null, true);
+        return;
+      }
+      // Unlisted origin — already 403'd above; do not emit CORS headers.
+      callback(null, false);
+    },
     credentials: true,
   }),
 );

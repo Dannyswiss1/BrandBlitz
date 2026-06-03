@@ -6,6 +6,7 @@ import { failPayoutsForChallenge } from "../../db/queries/payouts";
 import { query } from "../../db";
 import { payoutJobOptions } from "../payout.queue";
 import { config } from "../../lib/config";
+import { forwardToDlq, payoutDlqQueue } from "../dlq";
 
 export const PAYOUT_WORKER_CONCURRENCY = config.PAYOUT_WORKER_CONCURRENCY;
 
@@ -36,15 +37,14 @@ export function createPayoutWorker(WorkerImpl: typeof Worker = Worker): Worker {
       error: err.message,
       attempts: job?.attemptsMade,
     });
-
-    if (job && (job.attemptsMade ?? 0) >= (payoutJobOptions.attempts ?? 1)) {
-      handleExhaustedPayoutJob(job, err).catch((auditError) => {
-        logger.error("Failed to persist exhausted payout job state", {
-          jobId: job.id,
-          error: auditError instanceof Error ? auditError.message : String(auditError),
-        });
+    // Once all retries are exhausted, dead-letter the job so the stranded
+    // payout row is reconciled and an audit_log record is written.
+    void forwardToDlq(payoutDlqQueue, job, err).catch((dlqErr) => {
+      logger.error("Failed to forward payout job to DLQ", {
+        jobId: job?.id,
+        error: (dlqErr as Error).message,
       });
-    }
+    });
   });
 
   return worker;

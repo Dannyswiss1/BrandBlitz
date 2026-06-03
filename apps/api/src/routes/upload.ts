@@ -8,17 +8,23 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { s3, BUCKETS, getPublicUrl } from "@brandblitz/storage";
+import {
+  s3,
+  BUCKETS,
+  getPublicUrl,
+  PRESIGNED_URL_TTL_SECONDS,
+} from "@brandblitz/storage";
 import { redis } from "../lib/redis";
 import { authenticate } from "../middleware/authenticate";
 import { uploadLimiter } from "../middleware/rate-limit";
 import { createError } from "../middleware/error";
+import { logger } from "../lib/logger";
 
 /** Redis key that proves a user owns a pending upload. TTL must outlive the
- *  presign window (60 s) plus the verify-retry window (~1.7 s × 3). 300 s is
- *  a generous but bounded limit — orphans not aborted within 5 min are swept
- *  by the server-side reaper (see docs/13-file-storage.md). */
-const PENDING_UPLOAD_TTL_SECONDS = 300;
+ *  presign window plus the verify-retry window (~1.7 s × 3), so it is anchored
+ *  to PRESIGNED_URL_TTL_SECONDS with a 60 s margin. Orphans not aborted within
+ *  this window are swept by the server-side reaper (see docs/13-file-storage.md). */
+const PENDING_UPLOAD_TTL_SECONDS = PRESIGNED_URL_TTL_SECONDS + 60;
 
 function pendingUploadKey(userId: string, s3Key: string): string {
   return `upload:pending:${userId}:${s3Key}`;
@@ -146,7 +152,20 @@ router.post("/presign", authenticate, uploadLimiter, async (req, res) => {
     ContentLength: contentLength,
   });
 
-  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 60 });
+  let uploadUrl: string;
+  try {
+    uploadUrl = await getSignedUrl(s3, command, {
+      expiresIn: PRESIGNED_URL_TTL_SECONDS,
+    });
+  } catch (err) {
+    // Never swallow an S3 signing failure — log it and return a structured error.
+    logger.error("Failed to generate presigned upload URL", {
+      userId: req.user!.sub,
+      type,
+      error: (err as Error).message,
+    });
+    throw createError("Failed to generate upload URL", 502, "S3_PRESIGN_FAILED");
+  }
 
   // Record ownership so /abort can verify the caller created this key
   await redis.set(
@@ -160,7 +179,7 @@ router.post("/presign", authenticate, uploadLimiter, async (req, res) => {
     uploadUrl,
     key,
     publicUrl: getPublicUrl(config.bucket, key),
-    expiresIn: 60,
+    expiresIn: PRESIGNED_URL_TTL_SECONDS,
   });
 });
 
@@ -217,8 +236,15 @@ router.post("/verify", authenticate, async (req, res) => {
     );
     const bytes = await (obj.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray();
     buf = Buffer.from(bytes);
-  } catch {
-    throw createError("Failed to read file from storage", 500);
+  } catch (err) {
+    // Surface S3 read failures server-side rather than letting them vanish.
+    logger.error("Failed to read uploaded file from storage", {
+      userId: req.user!.sub,
+      key,
+      bucket,
+      error: (err as Error).message,
+    });
+    throw createError("Failed to read file from storage", 502, "S3_READ_FAILED");
   }
 
   // Step 3: validate detected MIME against declared MIME

@@ -17,6 +17,17 @@ export const BUCKETS = {
   SHARE_CARDS: process.env.S3_BUCKET_SHARE_CARDS ?? "share-cards",
 } as const;
 
+/**
+ * Lifetime (in seconds) of a presigned upload URL.
+ *
+ * This is the single source of truth for the presign window: the API uses it
+ * when calling `getSignedUrl`, and the web upload UI must use the same value
+ * for its countdown so the client never lets a user submit against an expired
+ * URL (which S3 answers with a swallowed 403). Keep this in sync with the UI
+ * timeout in apps/web's upload component.
+ */
+export const PRESIGNED_URL_TTL_SECONDS = 600;
+
 export type BucketKey = (typeof BUCKETS)[keyof typeof BUCKETS];
 
 /**

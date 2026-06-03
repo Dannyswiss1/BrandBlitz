@@ -8,6 +8,7 @@ import {
   updateReferralPayoutStatus,
 } from "../../db/queries/referral-payouts";
 import { referralBonusQueue } from "../referral-bonus.queue";
+import { forwardToDlq, referralBonusDlqQueue } from "../dlq";
 
 export const referralBonusWorkerOptions = {
   concurrency: 2,
@@ -90,9 +91,25 @@ async function processReferralBonusJob(
 export function createReferralBonusWorker(
   WorkerImpl: typeof Worker = Worker,
 ): Worker {
-  return new WorkerImpl(
+  const worker = new WorkerImpl(
     referralBonusQueue.name,
     processReferralBonusJob,
     referralBonusWorkerOptions,
   );
+
+  worker.on("failed", (job, err) => {
+    logger.error("Referral bonus job failed", {
+      jobId: job?.id,
+      error: err.message,
+      attempts: job?.attemptsMade,
+    });
+    void forwardToDlq(referralBonusDlqQueue, job, err).catch((dlqErr) => {
+      logger.error("Failed to forward referral-bonus job to DLQ", {
+        jobId: job?.id,
+        error: (dlqErr as Error).message,
+      });
+    });
+  });
+
+  return worker;
 }

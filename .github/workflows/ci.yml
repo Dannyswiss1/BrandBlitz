@@ -31,6 +31,36 @@ jobs:
         # The second call enforces runbooks strictly because they are the
         # critical operational documents (rotate-secrets.md, cdn-purge.md, …)
 
+  # ── Environment config validation ───────────────────────────────────────────
+  env-check:
+    name: Required env vars present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate ALLOWED_ORIGINS is configured everywhere
+        run: |
+          set -euo pipefail
+          fail=0
+          check() {
+            local file="$1"
+            if grep -Eq '^[[:space:]]*ALLOWED_ORIGINS[:=]' "$file"; then
+              echo "✅ $file declares ALLOWED_ORIGINS"
+            else
+              echo "❌ $file is missing ALLOWED_ORIGINS"
+              fail=1
+            fi
+          }
+          # ALLOWED_ORIGINS must be present in every environment's config so the
+          # API never falls back to a permissive CORS origin (no wildcard).
+          check .env.example
+          check apps/api/.env.test
+          check docker-compose.yml
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::ALLOWED_ORIGINS must be set in every environment config (no wildcard fallback)."
+            exit 1
+          fi
+
   # ── Unit tests ───────────────────────────────────────────────────────────────
   test-api:
     name: API unit tests

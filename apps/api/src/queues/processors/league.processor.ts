@@ -3,9 +3,10 @@ import { redis } from "../../lib/redis";
 import { logger } from "../../lib/logger";
 import { addUtcDays, getUtcWeekStart } from "../../lib/week";
 import { rankAndFlagWeek, recalculateWeeklyPoints, seedWeekAssignments } from "../../db/queries/leagues";
+import { forwardToDlq, leagueDlqQueue } from "../dlq";
 
 export function createLeagueWorker(WorkerCtor: typeof Worker = Worker, opts?: WorkerOptions) {
-  return new WorkerCtor(
+  const worker = new WorkerCtor(
     "league",
     async (job: Job) => {
       if (job.name === "finalize-week") {
@@ -30,5 +31,22 @@ export function createLeagueWorker(WorkerCtor: typeof Worker = Worker, opts?: Wo
       ...opts,
     }
   );
+
+  worker.on("failed", (job, err) => {
+    logger.error("League job failed", {
+      jobId: job?.id,
+      name: job?.name,
+      error: err.message,
+      attempts: job?.attemptsMade,
+    });
+    void forwardToDlq(leagueDlqQueue, job, err).catch((dlqErr) => {
+      logger.error("Failed to forward league job to DLQ", {
+        jobId: job?.id,
+        error: (dlqErr as Error).message,
+      });
+    });
+  });
+
+  return worker;
 }
 

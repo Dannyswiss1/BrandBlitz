@@ -22,6 +22,31 @@ export const configSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().min(1),
   WEB_URL: z.string().url().default("http://localhost:3000"),
 
+  /**
+   * Comma-separated list of origins permitted by CORS. Required in EVERY
+   * environment — there is intentionally no default and no wildcard fallback.
+   * A missing value fails config validation at startup; a literal "*" is
+   * rejected so permissive CORS can never be configured by accident.
+   */
+  ALLOWED_ORIGINS: z
+    .string({
+      required_error:
+        "ALLOWED_ORIGINS is required (comma-separated explicit origins, no wildcard)",
+    })
+    .min(1, "ALLOWED_ORIGINS must list at least one explicit origin")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+    )
+    .refine((origins) => origins.length > 0, {
+      message: "ALLOWED_ORIGINS must contain at least one origin",
+    })
+    .refine((origins) => !origins.includes("*"), {
+      message: "ALLOWED_ORIGINS must not contain a wildcard '*'",
+    }),
+
   // Stellar
   STELLAR_NETWORK: z.enum(["testnet", "public"]).default("testnet"),
   HOT_WALLET_SECRET: z.string().min(1),
