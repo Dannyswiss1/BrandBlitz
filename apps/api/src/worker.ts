@@ -13,6 +13,10 @@ import { createGdprErasureWorker } from "./queues/processors/gdpr-erasure.proces
 import { createReferralBonusWorker } from "./queues/processors/referral-bonus.processor";
 import { ensureLeagueRepeatableJobs } from "./queues/league.queue";
 import { createSessionTimeoutWorker } from "./queues/processors/session-timeout.processor";
+import {
+  createLeaderboardRefreshWorker,
+  leaderboardRefreshQueue,
+} from "./queues/leaderboard-refresh.queue";
 import { referralBonusQueue } from "./queues/referral-bonus.queue";
 import {
   ensureSessionTimeoutSweepJob,

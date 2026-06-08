@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getActiveChallenges } from "../db/queries/challenges";
-import { getLeaderboard, getTopSessionsPerChallenge } from "../db/queries/sessions";
+import {
+  getLeaderboard,
+  getTopSessionsPerChallenge,
+  getGlobalLeaderboardFromView,
+} from "../db/queries/sessions";
 import { cached } from "../lib/cache";
 
 const router = Router();
@@ -106,24 +110,22 @@ router.get("/global", async (req, res) => {
   const response = await cached(`leaderboard:global:${limit}:${offset}`, 300, async () => {
     const challenges = await getActiveChallenges(10);
     const challengeIds = challenges.map((c) => c.id);
-    const topSessions = await getTopSessionsPerChallenge(challengeIds, 10);
 
-    const rankPerChallenge = new Map<string, number>();
-    const allSessions = topSessions.map((s) => {
-      const rank = (rankPerChallenge.get(s.challenge_id) ?? 0) + 1;
-      rankPerChallenge.set(s.challenge_id, rank);
-      return {
-        rank,
-        challengeId: s.challenge_id,
-        userId: s.user_id,
-        username: s.username,
-        displayName: s.display_name,
-        league: s.league,
-        avatarUrl: s.avatar_url,
-        totalScore: s.total_score,
-        totalEarned: s.total_earned_usdc,
-      };
-    });
+    // Cold path: query the pre-computed materialised view instead of a raw
+    // aggregate scan, so cache misses are no longer expensive.
+    const viewRows = await getGlobalLeaderboardFromView(challengeIds, 10);
+
+    const allSessions = viewRows.map((s) => ({
+      rank: s.rank,
+      challengeId: s.challenge_id,
+      userId: s.user_id,
+      username: s.username,
+      displayName: s.display_name,
+      league: s.league,
+      avatarUrl: s.avatar_url,
+      totalScore: s.total_score,
+      totalEarned: s.total_earned_usdc,
+    }));
 
     const leaderboard = allSessions.slice(offset, offset + limit);
 

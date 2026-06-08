@@ -329,6 +329,34 @@ export async function getTopSessionsPerChallenge(
   return result.rows;
 }
 
+export interface GlobalLeaderboardRow {
+  challenge_id: string;
+  rank: number;
+  user_id: string;
+  username: string;
+  display_name: string;
+  league: "bronze" | "silver" | "gold" | null;
+  avatar_url: string | null;
+  total_score: number;
+  total_earned_usdc: string;
+}
+
+export async function getGlobalLeaderboardFromView(
+  challengeIds: string[],
+  limitPerChallenge = 10
+): Promise<GlobalLeaderboardRow[]> {
+  if (challengeIds.length === 0) return [];
+  const result = await query<GlobalLeaderboardRow>(
+    `SELECT challenge_id, rank, user_id, username, display_name, league, avatar_url,
+            total_score, total_earned_usdc
+     FROM v_leaderboard_global
+     WHERE challenge_id = ANY($1::uuid[]) AND rank <= $2
+     ORDER BY challenge_id ASC, rank ASC`,
+    [challengeIds, limitPerChallenge]
+  );
+  return result.rows;
+}
+
 export async function getArchivedLeaderboard(
   challengeId: string,
   limit = 20,

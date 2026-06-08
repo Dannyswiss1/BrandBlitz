@@ -8,6 +8,7 @@ import leaderboardRouter from "./leaderboard";
 const mocks = vi.hoisted(() => ({
   getActiveChallenges: vi.fn(),
   getTopSessionsPerChallenge: vi.fn(),
+  getGlobalLeaderboardFromView: vi.fn(),
   getLeaderboard: vi.fn(),
   redisGet: vi.fn(),
   redisSet: vi.fn(),
@@ -26,6 +27,10 @@ vi.mock("../db/queries/sessions", () => ({
   getTopSessionsPerChallenge: (...args: unknown[]) => {
     mocks.dbQueryCount.value++;
     return mocks.getTopSessionsPerChallenge(...args);
+  },
+  getGlobalLeaderboardFromView: (...args: unknown[]) => {
+    mocks.dbQueryCount.value++;
+    return mocks.getGlobalLeaderboardFromView(...args);
   },
 }));
 
@@ -47,18 +52,45 @@ function createApp() {
 
 const CHALLENGES = [{ id: "challenge-aaa" }, { id: "challenge-bbb" }];
 
+// Shape returned by getGlobalLeaderboardFromView (pre-computed rank from the MV)
+const VIEW_ROWS = [
+  {
+    challenge_id: "challenge-aaa", rank: 1,
+    user_id: "u1", username: "alice", display_name: "Alice", league: null,
+    avatar_url: null, total_score: 300, total_earned_usdc: "0.0000000",
+  },
+  {
+    challenge_id: "challenge-aaa", rank: 2,
+    user_id: "u2", username: "bob", display_name: "Bob", league: null,
+    avatar_url: null, total_score: 200, total_earned_usdc: "0.0000000",
+  },
+  {
+    challenge_id: "challenge-bbb", rank: 1,
+    user_id: "u3", username: "carol", display_name: "Carol", league: "gold" as const,
+    avatar_url: "https://cdn.example.com/carol.png", total_score: 400, total_earned_usdc: "1.0000000",
+  },
+
+];
+
+// Legacy shape still used by the SSE stream route
 const TOP_SESSIONS = [
   {
     id: "s1", user_id: "u1", challenge_id: "challenge-aaa",
-    username: "alice", avatar_url: null, total_score: 300, completed_at: "2026-01-01T01:00:00Z",
+    username: "alice", display_name: "Alice", league: null,
+    avatar_url: null, total_score: 300, completed_at: "2026-01-01T01:00:00Z",
+    total_earned_usdc: "0.0000000",
   },
   {
     id: "s2", user_id: "u2", challenge_id: "challenge-aaa",
-    username: "bob", avatar_url: null, total_score: 200, completed_at: "2026-01-01T02:00:00Z",
+    username: "bob", display_name: "Bob", league: null,
+    avatar_url: null, total_score: 200, completed_at: "2026-01-01T02:00:00Z",
+    total_earned_usdc: "0.0000000",
   },
   {
     id: "s3", user_id: "u3", challenge_id: "challenge-bbb",
-    username: "carol", avatar_url: "https://cdn.example.com/carol.png", total_score: 400, completed_at: "2026-01-01T03:00:00Z",
+    username: "carol", display_name: "Carol", league: "gold" as const,
+    avatar_url: "https://cdn.example.com/carol.png", total_score: 400, completed_at: "2026-01-01T03:00:00Z",
+    total_earned_usdc: "1.0000000",
   },
 ];
 
@@ -71,7 +103,7 @@ describe("GET /leaderboard/global", () => {
     mocks.redisGet.mockResolvedValue(null);
     mocks.redisSet.mockResolvedValue("OK");
     mocks.getActiveChallenges.mockResolvedValue(CHALLENGES);
-    mocks.getTopSessionsPerChallenge.mockResolvedValue(TOP_SESSIONS);
+    mocks.getGlobalLeaderboardFromView.mockResolvedValue(VIEW_ROWS);
   });
 
   it("returns 200 with a leaderboard array", async () => {
@@ -80,21 +112,23 @@ describe("GET /leaderboard/global", () => {
     expect(Array.isArray(res.body.leaderboard)).toBe(true);
   });
 
-  it("issues exactly one DB query — not N+1", async () => {
+  it("cache fallback path reads from the materialised view, not the raw tables", async () => {
     await request(createApp()).get("/leaderboard/global");
+    // One DB call: getGlobalLeaderboardFromView; raw aggregate scan is NOT used
     expect(mocks.dbQueryCount.value).toBe(1);
     expect(mocks.getLeaderboard).not.toHaveBeenCalled();
+    expect(mocks.getTopSessionsPerChallenge).not.toHaveBeenCalled();
   });
 
-  it("calls getTopSessionsPerChallenge with all challenge IDs", async () => {
+  it("calls getGlobalLeaderboardFromView with all challenge IDs", async () => {
     await request(createApp()).get("/leaderboard/global");
-    expect(mocks.getTopSessionsPerChallenge).toHaveBeenCalledWith(
+    expect(mocks.getGlobalLeaderboardFromView).toHaveBeenCalledWith(
       ["challenge-aaa", "challenge-bbb"],
       10
     );
   });
 
-  it("assigns sequential rank per challenge, restarting at 1 for each", async () => {
+  it("view rows returns pre-computed per-challenge rank", async () => {
     const res = await request(createApp()).get("/leaderboard/global");
     const lb = res.body.leaderboard as Array<{ challengeId: string; rank: number }>;
 
@@ -105,7 +139,7 @@ describe("GET /leaderboard/global", () => {
     expect(bbb.map((e) => e.rank)).toEqual([1]);
   });
 
-  it("orders sessions by descending score within each challenge", async () => {
+  it("orders sessions by ascending rank within each challenge", async () => {
     const res = await request(createApp()).get("/leaderboard/global");
     const aaaScores = (res.body.leaderboard as Array<{ challengeId: string; totalScore: number }>)
       .filter((e) => e.challengeId === "challenge-aaa")
@@ -122,7 +156,7 @@ describe("GET /leaderboard/global", () => {
   it("writes the result to Redis with a 300 s TTL", async () => {
     await request(createApp()).get("/leaderboard/global");
     expect(mocks.redisSet).toHaveBeenCalledWith(
-      "leaderboard:global",
+      expect.stringMatching(/^leaderboard:global:/),
       expect.any(String),
       "EX",
       300
@@ -145,7 +179,7 @@ describe("GET /leaderboard/global", () => {
 
   it("handles an empty active-challenges list gracefully", async () => {
     mocks.getActiveChallenges.mockResolvedValue([]);
-    mocks.getTopSessionsPerChallenge.mockResolvedValue([]);
+    mocks.getGlobalLeaderboardFromView.mockResolvedValue([]);
 
     const res = await request(createApp()).get("/leaderboard/global");
 

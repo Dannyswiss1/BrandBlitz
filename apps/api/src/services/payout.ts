@@ -15,6 +15,7 @@ import { incrementUserEarnings } from "../db/queries/users";
 import { rankWinners } from "./scoring";
 import { calculatePayoutShareStroops, stroopsToUsdc } from "../lib/usdc";
 import { payoutJobOptions, payoutQueue } from "../queues/payout.queue";
+import { enqueueLeaderboardRefresh } from "../queues/leaderboard-refresh.queue";
 import { logger } from "../lib/logger";
 import { metrics } from "../lib/metrics";
 import { config } from "../lib/config";
@@ -28,6 +29,7 @@ import { queueReferralBonusForPayout } from "./referrals";
  */
 export async function enqueuePayout(challengeId: string): Promise<void> {
   await payoutQueue.add("process-payout", { challengeId }, payoutJobOptions);
+  await enqueueLeaderboardRefresh(challengeId);
   logger.info("Payout job enqueued", { challengeId });
 }
 

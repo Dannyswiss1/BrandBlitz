@@ -16,6 +16,7 @@ import { connectDb, closeDb, query } from "./db";
 import { connectRedis, redis } from "./lib/redis";
 import { payoutQueue } from "./queues/payout.queue";
 import { leagueQueue } from "./queues/league.queue";
+import { leaderboardRefreshQueue } from "./queues/leaderboard-refresh.queue";
 import { logger } from "./lib/logger";
 import { config } from "./lib/config";
 
@@ -198,6 +199,7 @@ async function start(): Promise<void> {
       try {
         await payoutQueue.close();
         await leagueQueue.close();
+        await leaderboardRefreshQueue.close();
         await closeDb();
         await redis.disconnect();
         logger.info("Shutdown complete");
