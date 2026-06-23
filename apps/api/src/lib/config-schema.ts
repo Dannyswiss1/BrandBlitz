@@ -10,6 +10,7 @@ export const configSchema = z.object({
   REDIS_URL: z.string().url(),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
   DB_SLOW_QUERY_MS: z.coerce.number().int().positive().default(250),
+  WARMUP_COMPLETE_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().default(2_000),
 
   // Auth
   JWT_SECRET: z.string().min(32),

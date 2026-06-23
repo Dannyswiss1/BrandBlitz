@@ -48,6 +48,9 @@ vi.mock("../middleware/anti-cheat", () => ({
   validateReactionTime: (req: any, res: any, next: any) => next(),
   validateDeviceFingerprint: (req: any, res: any, next: any) => next(),
 }));
+vi.mock("../middleware/require-active-user", () => ({
+  requireActiveUser: (req: any, res: any, next: any) => next(),
+}));
 vi.mock("../middleware/rate-limit", () => ({
   challengeStartLimiter: (req: any, res: any, next: any) => next(),
 }));
@@ -59,6 +62,9 @@ vi.mock("@brandblitz/stellar", () => ({
 }));
 vi.mock("../services/streaks", () => ({
   updateStreak: vi.fn(),
+}));
+vi.mock("../services/badges", () => ({
+  checkAndAwardSessionBadges: vi.fn(),
 }));
 
 import * as challengeQueries from "../db/queries/challenges";
@@ -102,22 +108,52 @@ describe("Sessions API", () => {
     it("should complete warmup happy path", async () => {
       (challengeQueries.getChallengeById as any).mockResolvedValue({ id: "c1" });
       (sessionQueries.getSession as any).mockResolvedValue({ id: "s1", user_id: "user123" });
-      (redis.get as any).mockResolvedValue((Date.now() - 1000).toString()); // already passed
+      (scoringService.completeWarmupWithLock as any).mockResolvedValue({
+        id: "s1",
+        user_id: "user123",
+      });
 
       const res = await request(app).post("/sessions/c1/warmup-complete");
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty("challengeToken");
+      expect(scoringService.completeWarmupWithLock).toHaveBeenCalledWith({
+        userId: "user123",
+        challengeId: "c1",
+      });
     });
 
     it("should 400 if warmup too fast", async () => {
       (challengeQueries.getChallengeById as any).mockResolvedValue({ id: "c1" });
       (sessionQueries.getSession as any).mockResolvedValue({ id: "s1", user_id: "user123" });
-      (redis.get as any).mockResolvedValue((Date.now() + 10000).toString()); // still in future
+      const error = new Error("Warm-up minimum not yet elapsed") as any;
+      error.statusCode = 400;
+      error.code = "WARMUP_TOO_FAST";
+      (scoringService.completeWarmupWithLock as any).mockRejectedValue(error);
 
       const res = await request(app).post("/sessions/c1/warmup-complete");
       expect(res.status).toBe(400);
       expect(res.body.code).toBe("WARMUP_TOO_FAST");
+    });
+
+    it("allows only one concurrent warmup completion", async () => {
+      (challengeQueries.getChallengeById as any).mockResolvedValue({ id: "c1" });
+      (sessionQueries.getSession as any).mockResolvedValue({ id: "s1", user_id: "user123" });
+      const conflict = new Error("Warm-up already completed") as any;
+      conflict.statusCode = 409;
+      conflict.code = "WARMUP_ALREADY_COMPLETED";
+      (scoringService.completeWarmupWithLock as any)
+        .mockResolvedValueOnce({ id: "s1", user_id: "user123" })
+        .mockRejectedValueOnce(conflict);
+
+      const [first, second] = await Promise.all([
+        request(app).post("/sessions/c1/warmup-complete"),
+        request(app).post("/sessions/c1/warmup-complete"),
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([200, 409]);
+      expect(scoringService.completeWarmupWithLock).toHaveBeenCalledTimes(2);
     });
   });
 
