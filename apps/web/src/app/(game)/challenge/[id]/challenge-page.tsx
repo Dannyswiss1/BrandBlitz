@@ -39,6 +39,7 @@ export function ChallengePage({ params }: Props) {
   const [challengeToken, setChallengeToken] = React.useState("");
   const [sessionId, setSessionId] = React.useState("");
   const [scores, setScores] = React.useState<number[]>([]);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!challengeId) return;
@@ -51,16 +52,26 @@ export function ChallengePage({ params }: Props) {
     const apiToken = (session as any).apiToken as string;
     const api = createApiClient(apiToken);
 
-    api.get(`/challenges/${challengeId}`).then((res) => {
-      setChallenge(res.data.challenge);
-      setQuestions(res.data.questions);
-      // Send visitorId (FingerprintJS) as deviceId for anti-cheat multi-account detection
-      // If FingerprintJS fails to load, visitorId will be null and backend will flag for review
-      api.post(`/sessions/${challengeId}/warmup-start`, { deviceId: visitorId }).then((r) => {
+    void (async () => {
+      try {
+        const res = await api.get(`/challenges/${challengeId}`);
+        setChallenge(res.data.challenge);
+        setQuestions(res.data.questions);
+      } catch {
+        setLoadError("Couldn't load the challenge. Check your connection and try again.");
+        return;
+      }
+
+      try {
+        // Send visitorId (FingerprintJS) as deviceId for anti-cheat multi-account detection.
+        // If FingerprintJS fails to load, visitorId will be null and backend will flag for review.
+        const r = await api.post(`/sessions/${challengeId}/warmup-start`, { deviceId: visitorId });
         setSessionId(r.data.sessionId);
         setPhase("warmup");
-      });
-    });
+      } catch {
+        setLoadError("Couldn't start the game session. Please try again.");
+      }
+    })();
   }, [challengeId, session, status, router, visitorId]);
 
   const handleWarmupComplete = (token: string) => {
@@ -131,6 +142,20 @@ export function ChallengePage({ params }: Props) {
     if (!last) return;
     void handleAnswer(last.option, last.reactionTimeMs);
   };
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-8 text-center">
+        <p className="text-lg font-medium text-[var(--foreground)]">{loadError}</p>
+        <button
+          className="rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] hover:opacity-90"
+          onClick={() => { setLoadError(null); router.refresh(); }}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
 
   if (phase === "loading") {
     return (

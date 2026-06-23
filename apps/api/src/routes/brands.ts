@@ -26,7 +26,11 @@ import { config } from "../lib/config";
 const router = Router();
 
 const BrandKitSchema = z.object({
-  name: z.string().min(1).max(100),
+  name: z
+    .string()
+    .min(1)
+    .max(100)
+    .refine((v) => !/<[^>]*>/.test(v), { message: "Brand name must not contain HTML tags" }),
   logoKey: z.string().optional(),
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),

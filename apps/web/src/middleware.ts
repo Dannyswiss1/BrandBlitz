@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
+import { getToken } from "next-auth/jwt";
 
 const REF_COOKIE_NAME = "ref";
 const REF_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -41,7 +42,31 @@ function buildCSPHeader(nonce: string): string {
   ].join("; ");
 }
 
-export function middleware(request: NextRequest): NextResponse {
+export async function middleware(request: NextRequest): Promise<NextResponse> {
+  const { pathname } = request.nextUrl;
+
+  // ── Auth redirect guard (issue #571) ──────────────────────────────────────
+  // getToken returns null for missing OR expired tokens, so checking its
+  // return value is the correct way to distinguish valid vs. expired sessions.
+  // This prevents the /login ↔ /dashboard redirect loop caused by checking
+  // only cookie presence without verifying the JWT expiry claim.
+  if (pathname === "/login" || pathname.startsWith("/login/")) {
+    const token = await getToken({
+      req: request,
+      secret: process.env.NEXTAUTH_SECRET,
+    });
+    if (token) {
+      // Session is valid and unexpired — redirect away from login.
+      const url = request.nextUrl.clone();
+      url.pathname = "/challenge";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+    // No token or expired token — fall through to render /login normally.
+    // NextAuth will clear its own cookie on the next /api/auth/* call.
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
   // Generate nonce for this request
   const nonce = generateNonce();
 
