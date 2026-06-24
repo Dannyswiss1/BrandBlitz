@@ -21,6 +21,8 @@ jobs:
       contents: read
       packages: write
       id-token: write   # required for cosign OIDC keyless signing
+      security-events: write # required to upload SARIF results to Security tab
+
 
     strategy:
       fail-fast: false
@@ -58,6 +60,36 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.repository.updated_at }}
 
+      - name: Build local image ${{ matrix.app }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          load: true
+          push: false
+          tags: brandblitz-${{ matrix.app }}:local
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.ORG }}/brandblitz-${{ matrix.app }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.ORG }}/brandblitz-${{ matrix.app }}:buildcache,mode=max
+
+      # To run the Trivy scan locally:
+      #   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image brandblitz-${{ matrix.app }}:local
+      - name: Run Trivy vulnerability scanner
+        id: trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: brandblitz-${{ matrix.app }}:local
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: 1
+          severity: HIGH,CRITICAL
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && (steps.trivy.outcome == 'success' || steps.trivy.outcome == 'failure')
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: brandblitz-${{ matrix.app }}
+
       - name: Build and push ${{ matrix.app }}
         id: push
         uses: docker/build-push-action@v6
@@ -71,6 +103,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.ORG }}/brandblitz-${{ matrix.app }}:buildcache,mode=max
           provenance: true
           sbom: true
+
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

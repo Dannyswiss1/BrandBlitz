@@ -1,0 +1,16 @@
+# PR Size Labeler Configuration
+# Thresholds define the maximum lines changed (additions + deletions) for each size category.
+thresholds:
+  XS: 10      # Under 10 lines is XS
+  S: 100      # 10 to 99 lines is S
+  M: 500      # 100 to 499 lines is M
+  L: 1000     # 500 to 999 lines is L
+  XL: Infinity # 1000 or more lines is XL
+
+# Files or patterns matching the ignore list are excluded from the line count calculation.
+ignore:
+  - "pnpm-lock.yaml"
+  - "package-lock.json"
+  - "*.snap"
+  - "dist/**"
+  - "build/**"

@@ -32,59 +32,164 @@ jobs:
     name: PR size guard
     runs-on: ubuntu-latest
     steps:
-      - name: Flag oversized PRs
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Apply size labels
         uses: actions/github-script@v7
         with:
           script: |
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-            });
+            const fs = require('fs');
 
-            const total = pr.additions + pr.deletions;
-            const LIMIT = 600;
+            // 1. Read and parse .github/pr-labeler-config.yml
+            const configContent = fs.readFileSync('.github/pr-labeler-config.yml', 'utf8');
+            const ignore = [];
+            const thresholds = {};
+            let section = null;
 
-            if (total > LIMIT) {
-              // Add the size: XL label (create it if it doesn't exist yet)
-              try {
-                await github.rest.issues.addLabels({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  labels: ['size: XL'],
-                });
-              } catch {
-                // Label may not exist in the repo yet — create it first
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: 'size: XL',
-                  color: 'e4e669',
-                  description: 'PR diff exceeds 600 lines — consider splitting',
-                }).catch(() => {});
-                await github.rest.issues.addLabels({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  labels: ['size: XL'],
-                });
+            configContent.split('\n').forEach(line => {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('#')) return;
+
+              if (trimmed.startsWith('thresholds:')) {
+                section = 'thresholds';
+                return;
+              }
+              if (trimmed.startsWith('ignore:')) {
+                section = 'ignore';
+                return;
               }
 
-              await github.rest.issues.createComment({
+              if (section === 'ignore' && trimmed.startsWith('-')) {
+                const value = trimmed.substring(1).trim().replace(/^['"]|['"]$/g, '');
+                ignore.push(value);
+              } else if (section === 'thresholds' && trimmed.includes(':')) {
+                const [key, val] = trimmed.split(':');
+                const parsedVal = val.trim() === 'Infinity' ? Infinity : parseInt(val.trim(), 10);
+                thresholds[key.trim()] = parsedVal;
+              }
+            });
+
+            console.log('Ignore patterns:', ignore);
+            console.log('Thresholds:', thresholds);
+
+            // Glob helper for matching patterns
+            function matchesPattern(filename, pattern) {
+              if (pattern === 'pnpm-lock.yaml') {
+                return filename === 'pnpm-lock.yaml' || filename.endsWith('/pnpm-lock.yaml');
+              }
+              let escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+              escaped = escaped.replace(/\*\*/g, '.*');
+              escaped = escaped.replace(/(?<!\.)\*(?!\*)/g, '[^/]*');
+              if (!pattern.startsWith('**/') && !pattern.startsWith('/')) {
+                escaped = '(^|.*/)' + escaped;
+              }
+              return new RegExp('^' + escaped + '$').test(filename);
+            }
+
+            function shouldIgnore(filename) {
+              return ignore.some(pattern => matchesPattern(filename, pattern));
+            }
+
+            // 2. Fetch all files changed in PR (handle pagination)
+            let files = [];
+            let page = 1;
+            while (true) {
+              const { data: pageFiles } = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100,
+                page: page,
+              });
+              if (pageFiles.length === 0) break;
+              files = files.concat(pageFiles);
+              if (pageFiles.length < 100) break;
+              page++;
+            }
+
+            // 3. Sum additions + deletions for non-ignored files
+            let totalLinesChanged = 0;
+            for (const file of files) {
+              if (shouldIgnore(file.filename)) {
+                console.log(`Skipping ignored file: ${file.filename} (+${file.additions} -${file.deletions})`);
+                continue;
+              }
+              totalLinesChanged += file.additions + file.deletions;
+            }
+            console.log(`Total lines changed (excluding ignored files): ${totalLinesChanged}`);
+
+            // 4. Map total lines to target label
+            let targetLabel = 'size/XL';
+            if (totalLinesChanged < thresholds.XS) {
+              targetLabel = 'size/XS';
+            } else if (totalLinesChanged < thresholds.S) {
+              targetLabel = 'size/S';
+            } else if (totalLinesChanged < thresholds.M) {
+              targetLabel = 'size/M';
+            } else if (totalLinesChanged < thresholds.L) {
+              targetLabel = 'size/L';
+            }
+            console.log(`Target label: ${targetLabel}`);
+
+            const labelColors = {
+              'size/XS': '3cbf00', // Green
+              'size/S': '5abf00',  // Light Green
+              'size/M': 'ffc000',  // Yellow
+              'size/L': 'ff9000',  // Orange
+              'size/XL': 'ff0000', // Red
+            };
+
+            // 5. Fetch current labels on issue
+            const { data: currentLabelsData } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const currentLabels = currentLabelsData.map(l => l.name);
+
+            // 6. Remove any outdated size labels
+            const sizeLabels = Object.keys(labelColors);
+            for (const label of currentLabels) {
+              if (sizeLabels.includes(label) && label !== targetLabel) {
+                console.log(`Removing outdated label: ${label}`);
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: label,
+                }).catch(() => {});
+              }
+            }
+
+            // 7. Ensure target label exists in repo and add it if not already present
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: targetLabel,
+              });
+            } catch {
+              console.log(`Creating label ${targetLabel}`);
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: targetLabel,
+                color: labelColors[targetLabel],
+                description: `PR diff size is ${targetLabel.split('/')[1]}`,
+              }).catch(() => {});
+            }
+
+            if (!currentLabels.includes(targetLabel)) {
+              console.log(`Adding label ${targetLabel}`);
+              await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: [
-                  `⚠️ **Large PR detected** — this PR changes **${total} lines** `,
-                  `(${pr.additions} additions + ${pr.deletions} deletions), `,
-                  `which exceeds the ${LIMIT}-line guideline.`,
-                  '',
-                  'Large PRs are harder to review and more likely to introduce merge conflicts. ',
-                  'Please consider splitting this into smaller, focused pull requests.',
-                ].join(''),
+                labels: [targetLabel],
               });
             }
+
 
   # ── PR title lint (conventional commits) ─────────────────────────────────
   title-lint:
