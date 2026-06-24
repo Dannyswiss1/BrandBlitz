@@ -28,8 +28,10 @@ function applyTheme(mode: ThemeMode) {
 
 export function ThemeToggle() {
   const [mode, setMode] = useState<ThemeMode>("system");
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     const initial = getStoredTheme();
     setMode(initial);
     applyTheme(initial);
@@ -63,6 +65,20 @@ export function ThemeToggle() {
     window.localStorage.setItem(STORAGE_KEY, next);
     applyTheme(next);
   };
+
+  if (!mounted) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled
+        aria-hidden="true"
+      >
+        System
+      </Button>
+    );
+  }
 
   return (
     <Button

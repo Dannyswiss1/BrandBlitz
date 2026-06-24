@@ -24,9 +24,16 @@ function useAnimatedValue(target: number, durationMs: number): number {
   const [value, setValue] = useState(0);
   const startTimeRef = useRef<number | null>(null);
   const rafRef = useRef<number>(0);
+  const hasStartedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    
+    if (hasStartedRef.current) {
+      return;
+    }
+    hasStartedRef.current = true;
+    
     startTimeRef.current = null;
 
     function easeOutCubic(t: number): number {
@@ -49,7 +56,10 @@ function useAnimatedValue(target: number, durationMs: number): number {
     }
 
     rafRef.current = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(rafRef.current);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      hasStartedRef.current = false;
+    };
   }, [target, durationMs]);
 
   return value;

@@ -7,7 +7,8 @@ import { toast } from "@/lib/toast";
 
 type LiveState =
   | { status: "idle" | "connecting" | "polling"; entries: LeaderboardEntry[] }
-  | { status: "live"; entries: LeaderboardEntry[]; updatedAt?: string };
+  | { status: "live"; entries: LeaderboardEntry[]; updatedAt?: string }
+  | { status: "disconnected"; entries: LeaderboardEntry[] };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost/api";
 
@@ -30,6 +31,8 @@ export function useLiveLeaderboard(opts?: {
   const pollTimerRef = useRef<number | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
   const hasShownConnectionErrorRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
 
   const pollUrl = useMemo(() => {
     if (challengeId) return `/leaderboard/${challengeId}?limit=100&offset=0`;
@@ -37,7 +40,8 @@ export function useLiveLeaderboard(opts?: {
   }, [challengeId]);
 
   useEffect(() => {
-    setState((prev) => ({ ...prev, status: "connecting" }));
+    setState((prev: LiveState) => ({ ...prev, status: "connecting" as const }));
+    reconnectAttemptsRef.current = 0;
 
     const reportConnectionError = () => {
       if (hasShownConnectionErrorRef.current) return;
@@ -60,9 +64,16 @@ export function useLiveLeaderboard(opts?: {
       }
     };
 
+    const stopReconnect = () => {
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+
     const startPolling = () => {
       stopPolling();
-      setState((prev) => ({ ...prev, status: "polling" }));
+      setState((prev: LiveState) => ({ ...prev, status: "polling" as const }));
 
       const fetchOnce = async () => {
         try {
@@ -83,42 +94,74 @@ export function useLiveLeaderboard(opts?: {
       }, 5000);
     };
 
-    stopPolling();
-    sourceRef.current?.close();
-    sourceRef.current = null;
+    const calculateBackoff = (attempt: number): number => {
+      const baseDelay = 1000;
+      const maxDelay = 30000;
+      const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
+      const jitter = exponentialDelay * 0.5 * Math.random();
+      return exponentialDelay + jitter;
+    };
 
-    let closed = false;
+    const reconnect = () => {
+      const attempts = reconnectAttemptsRef.current;
+      if (attempts >= 10) {
+        setState((prev: LiveState) => ({ ...prev, status: "disconnected" as const }));
+        return;
+      }
 
-    try {
-      const source = new EventSource(buildStreamUrl(challengeId));
-      sourceRef.current = source;
+      const delay = calculateBackoff(attempts);
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectAttemptsRef.current = attempts + 1;
+        connect();
+      }, delay);
+    };
 
-      source.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
+    const connect = () => {
+      stopPolling();
+      stopReconnect();
+      sourceRef.current?.close();
+      sourceRef.current = null;
+
+      let closed = false;
+
+      try {
+        const source = new EventSource(buildStreamUrl(challengeId));
+        sourceRef.current = source;
+
+        source.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (closed) return;
+            const nextEntries: LeaderboardEntry[] = challengeId ? data.sessions : data.leaderboard;
+            clearConnectionError();
+            reconnectAttemptsRef.current = 0;
+            setState({ status: "live", entries: nextEntries, updatedAt: data.updatedAt });
+          } catch {
+            // ignore parse errors
+          }
+        };
+
+        source.onerror = () => {
           if (closed) return;
-          const nextEntries: LeaderboardEntry[] = challengeId ? data.sessions : data.leaderboard;
-          clearConnectionError();
-          setState({ status: "live", entries: nextEntries, updatedAt: data.updatedAt });
-        } catch {
-          // ignore parse errors
-        }
-      };
-
-      source.onerror = () => {
-        if (closed) return;
-        source.close();
+          source.close();
+          reportConnectionError();
+          reconnect();
+        };
+      } catch {
         reportConnectionError();
-        startPolling();
+        reconnect();
+      }
+
+      return () => {
+        closed = true;
       };
-    } catch {
-      reportConnectionError();
-      startPolling();
-    }
+    };
+
+    connect();
 
     return () => {
-      closed = true;
       stopPolling();
+      stopReconnect();
       sourceRef.current?.close();
       sourceRef.current = null;
     };

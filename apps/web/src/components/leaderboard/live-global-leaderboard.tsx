@@ -59,6 +59,7 @@ export function LiveGlobalLeaderboard({
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [isDisconnected, setIsDisconnected] = useState(false);
   const prevRankByUserRef = useRef<Map<string, number>>(new Map());
   const [changedUsers, setChangedUsers] = useState<Set<string>>(new Set());
   const restoreOnceRef = useRef(false);
@@ -173,6 +174,20 @@ export function LiveGlobalLeaderboard({
       setIsLoadingMore(false);
     }
   };
+
+  if (isDisconnected) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          title="Connection lost"
+          description="We couldn't connect to the live leaderboard. Please refresh the page to try again."
+          action={
+            <Button onClick={() => window.location.reload()}>Refresh to Retry</Button>
+          }
+        />
+      </div>
+    );
+  }
 
   if (rows.length === 0) {
     return (
