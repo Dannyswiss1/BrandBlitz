@@ -11,6 +11,19 @@ export interface DepositEvent {
   createdAt: string;
 }
 
+export type DepositMemoValidation =
+  | { valid: true; memo: string }
+  | { valid: false; reason: "missing" | "invalid_format" };
+
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function validateDepositMemo(memo: string | null): DepositMemoValidation {
+  if (!memo?.trim()) return { valid: false, reason: "missing" };
+  if (!UUID_V4_PATTERN.test(memo)) return { valid: false, reason: "invalid_format" };
+  return { valid: true, memo };
+}
+
 /**
  * Poll Stellar RPC getEvents for USDC transfers to the hot wallet.
  * Returns a list of deposit events since the given cursor ledger.
@@ -57,13 +70,23 @@ export async function fetchDepositEvents(
         continue;
       }
 
-      const memo = (txMeta as any).memo?.text ?? "";
+      const memo = (txMeta as any).memo?.text ?? null;
+      const memoValidation = validateDepositMemo(memo);
+      if (!memoValidation.valid) {
+        console.warn("Rejecting deposit with invalid memo", {
+          reason: memoValidation.reason,
+          memo: memo?.slice(0, 28) ?? null,
+          txHash: event.txHash,
+          senderAccount: (event as any).from ?? null,
+        });
+        continue;
+      }
       const amount = event.value?.toString() ?? "0";
 
       events.push({
         txHash: event.txHash,
         amount,
-        memo,
+        memo: memoValidation.memo,
         to: hotWalletAddress,
         ledger: event.ledger,
         createdAt: new Date(event.ledgerClosedAt).toISOString(),

@@ -9,8 +9,14 @@ import { findPayoutByTxHash } from "../db/queries/payouts";
 import { webhookLimiter } from "../middleware/rate-limit";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
+import { getAccountUsdcBalance } from "@brandblitz/stellar";
 
 const router = Router();
+
+function usdcToStroops(value: string): bigint {
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(`${whole}${fraction.padEnd(7, "0").slice(0, 7)}`);
+}
 
 const DepositWebhookSchema = z
   .object({
@@ -53,6 +59,20 @@ router.post("/stellar/deposit", webhookLimiter, async (req, res) => {
 
   if (challenge.status !== "pending_deposit") {
     res.json({ status: "already_processed" });
+    return;
+  }
+
+  const requiredBalance = usdcToStroops(challenge.pool_amount_usdc);
+  const currentBalance = await getAccountUsdcBalance(
+    config.HOT_WALLET_PUBLIC_KEY,
+    config.STELLAR_NETWORK
+  );
+  if (currentBalance < requiredBalance) {
+    res.status(422).json({
+      code: "INSUFFICIENT_ESCROW_BALANCE",
+      currentBalance: currentBalance.toString(),
+      requiredAmount: requiredBalance.toString(),
+    });
     return;
   }
 

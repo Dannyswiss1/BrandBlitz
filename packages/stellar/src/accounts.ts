@@ -95,3 +95,23 @@ export async function accountHasUsdcTrustline(
     return false;
   }
 }
+
+/** Return an account's USDC trustline balance in Stellar stroops (7 decimals). */
+export async function getAccountUsdcBalance(
+  publicKey: string,
+  network: NetworkName = "testnet"
+): Promise<bigint> {
+  const horizon = getHorizonServer(network);
+  const usdc = getUsdcAsset(network);
+  const account = await horizon.loadAccount(publicKey);
+  const balance = account.balances.find(
+    (item) =>
+      item.asset_type === "credit_alphanum4" &&
+      (item as any).asset_code === "USDC" &&
+      (item as any).asset_issuer === usdc.getIssuer()
+  ) as { balance?: string } | undefined;
+
+  if (!balance?.balance) return 0n;
+  const [whole, fraction = ""] = balance.balance.split(".");
+  return BigInt(`${whole}${fraction.padEnd(7, "0").slice(0, 7)}`);
+}
