@@ -10,8 +10,28 @@ const router = Router();
 router.use(authenticate);
 router.use(requireAdmin);
 
+import { z } from "zod";
+
+const KnownConfigSchema = z.discriminatedUnion("key", [
+  z.object({
+    key: z.literal("anti_cheat"),
+    value: z.object({
+      maxSpeedBonusMs: z.number().optional(),
+      minReactionTimeMs: z.number().optional(),
+    }),
+  }),
+  z.object({
+    key: z.literal("league"),
+    value: z.record(z.unknown()), // Fallback schema for league
+  }),
+  z.object({
+    key: z.literal("payout"),
+    value: z.record(z.unknown()), // Fallback schema for payout
+  })
+]);
+
 const PatchConfigSchema = z.object({
-  value: z.record(z.unknown()),
+  value: z.any(),
 });
 
 /**
@@ -20,9 +40,14 @@ const PatchConfigSchema = z.object({
  */
 router.patch("/:key", async (req, res) => {
   const { value } = PatchConfigSchema.parse(req.body);
-  await setConfig(req.params.key, value, req.user!.sub);
-  const updated = await getConfig(req.params.key);
-  res.json({ key: req.params.key, value: updated });
+  const key = req.params.key;
+
+  // Write-time validation and Unknown-key rejection
+  const validated = KnownConfigSchema.parse({ key, value });
+
+  await setConfig(key, validated.value, req.user!.sub);
+  const updated = await getConfig(key);
+  res.json({ key, value: updated });
 });
 
 /**

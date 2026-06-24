@@ -186,43 +186,13 @@ router.post(
     if (existingScores.some((s: any) => s.round === round)) {
       throw createError("Round already answered", 400);
     }
-router.post("/:challengeId/answer/:round", authenticate, validateReactionTime, async (req, res) => {
-  const round = parseInt(req.params.round) as 1 | 2 | 3;
-  if (![1, 2, 3].includes(round)) throw createError("Invalid round", 400);
 
-  const body = AnswerSchema.parse(req.body);
-  const challenge = await getChallengeById(req.params.challengeId);
-  if (!challenge) throw createError("Challenge not found", 404);
+    // Get the server-stored question for this round
+    const questions = await getChallengeQuestions(challenge.id);
+    const question = questions.find((q) => q.round === round);
+    if (!question) throw createError("Question not found", 404);
 
-  const session = await getSession(req.user!.sub, challenge.id);
-  if (!session) throw createError("Session not found", 404);
-  if (session.user_id !== req.user!.sub) throw createError("Forbidden", 403);
-  if (!session.challenge_started_at) throw createError("Challenge not started", 400);
 
-  // For non-round-3, a completed session is always a hard stop
-  if (session.completed_at && round !== 3) {
-    throw createError("Session already completed", 409);
-  }
-  if (session.is_flagged) throw createError("Session flagged for review", 403);
-
-  // Double answer check
-  const existingScores = (session as any).scores || [];
-  if (existingScores.some((s: any) => s.round === round)) {
-    throw createError("Round already answered", 400);
-  }
-
-  // Get the server-stored question for this round
-  const questions = await getChallengeQuestions(challenge.id);
-  const question = questions.find((q) => q.round === round);
-  if (!question) throw createError("Question not found", 404);
-
-    // On last round — finalize the session
-    if (round === 3) {
-      await finishSession(session.id);
-      const token = bearerToken(req);
-      if (token) {
-        await revokeSessionToken(session.id, token, req.user!.exp);
-      }
   // Idempotent round-3 replay: return cached result if answer matches; reject if it differs
   if (session.completed_at && round === 3) {
     if (session.round_3_answer !== body.selectedOption) {

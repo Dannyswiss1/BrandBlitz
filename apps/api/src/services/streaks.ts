@@ -59,18 +59,19 @@ export async function repairStreak(
 }
 
 function formatStreak(streak: StreakState, now: Date): StreakResponse {
+  const normalizedStreak = typeof streak.streak === "number" ? streak.streak : 0;
   const lastPlayDay = normalizeDay(streak.last_play_day);
   const nextMilestone =
-    STREAK_MILESTONES.find((m) => m > streak.streak) ??
+    STREAK_MILESTONES.find((m) => m > normalizedStreak) ??
     STREAK_MILESTONES[STREAK_MILESTONES.length - 1];
   return {
-    streak: streak.streak,
+    streak: normalizedStreak,
     lastPlayDay,
     repairAvailable: streak.streak_repair_available,
     nextMilestone,
-    progress: Math.min(1, streak.streak / Math.max(1, nextMilestone)),
+    progress: Math.min(1, normalizedStreak / Math.max(1, nextMilestone)),
     milestoneJustHit:
-      STREAK_MILESTONES.includes(streak.streak as any) && lastPlayDay === toUtcDay(now),
+      STREAK_MILESTONES.includes(normalizedStreak as any) && lastPlayDay === toUtcDay(now),
   };
 }
 
