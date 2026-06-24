@@ -5,9 +5,12 @@ import {
   createBrand,
   getBrandsByOwner,
   getBrandById,
+  getPublicBrandById,
+  getPublicBrands,
   getBrandMetaById,
   getActiveDistractorBrands,
   toBrandApi,
+  toPublicBrandApi,
   updateBrand,
   deleteBrand,
 } from "../db/queries/brands";
@@ -24,6 +27,9 @@ import { logger } from "../lib/logger";
 import { config } from "../lib/config";
 
 const router = Router();
+const PublicBrandsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
 
 const BrandKitSchema = z.object({
   name: z
@@ -68,6 +74,23 @@ function validateChallengeEndsAt(endsAt: string): void {
     );
   }
 }
+
+/**
+ * GET /brands/public
+ * Safe, unauthenticated data for ISR brand-profile pages.
+ */
+router.get("/public", async (req, res) => {
+  const { limit } = PublicBrandsQuerySchema.parse(req.query);
+  const brands = await getPublicBrands(limit);
+  res.json({ brands: brands.map(toPublicBrandApi) });
+});
+
+/** GET /brands/public/:id */
+router.get("/public/:id", async (req, res) => {
+  const brand = await getPublicBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  res.json({ brand: toPublicBrandApi(brand) });
+});
 
 /**
  * GET /brands

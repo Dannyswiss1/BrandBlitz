@@ -17,6 +17,8 @@ import deleteAccountRoutes from "./me/delete-account";
 import docsRoutes from "./docs";
 import cspReportRoutes from "./csp-report";
 import legalRoutes from "./legal";
+import configRoutes from "./config";
+import adminCacheRoutes from "./admin/cache";
 
 export function registerRoutes(app: Express): void {
   // #143 — interactive OpenAPI 3.1 docs at /docs (Scalar UI) plus
@@ -25,6 +27,7 @@ export function registerRoutes(app: Express): void {
   app.use("/docs", docsRoutes);
   app.use("/csp-report", cspReportRoutes);
   app.use("/legal", legalRoutes);
+  app.use("/config", configRoutes);
   app.use("/auth", authRoutes);
   app.use("/brands", brandsRoutes);
   app.use("/challenges", challengesRoutes);
@@ -38,6 +41,7 @@ export function registerRoutes(app: Express): void {
   app.use("/admin/users", adminUsersRoutes);
   app.use("/admin/fraud-flags", adminFraudRoutes);
   app.use("/admin/challenges", adminChallengesRoutes);
+  app.use("/admin/cache", adminCacheRoutes);
   // General admin endpoints (archive inspection, dead-letter queue triage).
   // Mounted after the more specific /admin/* routers; its own routes
   // (/admin/dlq, /admin/archive/...) do not overlap with them.

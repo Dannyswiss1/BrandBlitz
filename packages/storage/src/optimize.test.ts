@@ -61,6 +61,32 @@ describe("optimizeImage", () => {
     });
   });
 
+  it("uses different fingerprinted keys when the optimized content changes", async () => {
+    vi.mocked(s3.send).mockResolvedValue({
+      Body: { transformToByteArray: async () => dummyBuffer },
+    });
+    vi.mocked(sharp)
+      .mockReturnValueOnce({
+        metadata: vi.fn().mockResolvedValue({ format: "png" }),
+        resize: vi.fn().mockReturnThis(),
+        webp: vi.fn().mockReturnThis(),
+        toBuffer: vi.fn().mockResolvedValue(Buffer.from("first image")),
+      } as any)
+      .mockReturnValueOnce({
+        metadata: vi.fn().mockResolvedValue({ format: "png" }),
+        resize: vi.fn().mockReturnThis(),
+        webp: vi.fn().mockReturnThis(),
+        toBuffer: vi.fn().mockResolvedValue(Buffer.from("second image")),
+      } as any);
+
+    const first = await optimizeImage("logos/logo.png", "brand-logo");
+    const second = await optimizeImage("logos/logo.png", "brand-logo");
+
+    expect(first).toMatch(/^logos\/logo-[a-f0-9]{8}\.webp$/);
+    expect(second).toMatch(/^logos\/logo-[a-f0-9]{8}\.webp$/);
+    expect(first).not.toBe(second);
+  });
+
   it("should throw a StorageError if the object body is null/undefined (missing object)", async () => {
     vi.mocked(s3.send).mockResolvedValue({
       Body: undefined,

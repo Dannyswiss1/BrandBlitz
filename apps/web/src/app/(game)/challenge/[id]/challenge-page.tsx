@@ -22,6 +22,33 @@ const ResultScreen = dynamic(() => import("@/components/game/result-screen").the
 
 type GamePhase = "loading" | "warmup" | "challenge" | "result";
 
+type CachedChallengeDetail = {
+  etag: string;
+  challenge: Challenge;
+  questions: ChallengeQuestion[];
+};
+
+function challengeDetailStorageKey(challengeId: string): string {
+  return `brandblitz:challenge-detail:${challengeId}`;
+}
+
+function getCachedChallengeDetail(challengeId: string): CachedChallengeDetail | null {
+  try {
+    const stored = window.sessionStorage.getItem(challengeDetailStorageKey(challengeId));
+    return stored ? JSON.parse(stored) as CachedChallengeDetail : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeChallengeDetail(challengeId: string, detail: CachedChallengeDetail): void {
+  try {
+    window.sessionStorage.setItem(challengeDetailStorageKey(challengeId), JSON.stringify(detail));
+  } catch {
+    // Session storage may be unavailable (private browsing or quota pressure).
+  }
+}
+
 interface Props {
   params: Promise<{ id: string }>;
 }
@@ -54,9 +81,26 @@ export function ChallengePage({ params }: Props) {
 
     void (async () => {
       try {
-        const res = await api.get(`/challenges/${challengeId}`);
-        setChallenge(res.data.challenge);
-        setQuestions(res.data.questions);
+        const cachedDetail = getCachedChallengeDetail(challengeId);
+        const res = await api.get(`/challenges/${challengeId}`, {
+          headers: cachedDetail?.etag ? { "If-None-Match": cachedDetail.etag } : undefined,
+          // Axios otherwise treats a valid 304 response as an error.
+          validateStatus: (status) => status === 200 || status === 304,
+        });
+
+        if (res.status === 304 && cachedDetail) {
+          setChallenge(cachedDetail.challenge);
+          setQuestions(cachedDetail.questions);
+        } else {
+          const detail = {
+            etag: res.headers.etag ?? "",
+            challenge: res.data.challenge as Challenge,
+            questions: res.data.questions as ChallengeQuestion[],
+          };
+          setChallenge(detail.challenge);
+          setQuestions(detail.questions);
+          if (detail.etag) storeChallengeDetail(challengeId, detail);
+        }
       } catch {
         setLoadError("Couldn't load the challenge. Check your connection and try again.");
         return;
@@ -80,7 +124,6 @@ export function ChallengePage({ params }: Props) {
     setCurrentRound(1);
   };
 
-  const handleAnswer = async (option: "A" | "B" | "C" | "D" | null, reactionTimeMs: number) => {
   // #154 — answer submission must surface errors instead of silently
   // advancing. Strategy: retry with backoff a few times for transient
   // failures, then surface an inline banner with a Retry button so
@@ -105,7 +148,11 @@ export function ChallengePage({ params }: Props) {
   const ANSWER_RETRY_DELAY_MS = 500;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const submitAnswer = async (option: "A" | "B" | "C" | "D", reactionTimeMs: number, signal: AbortSignal) => {
+  const submitAnswer = async (
+    option: "A" | "B" | "C" | "D" | null,
+    reactionTimeMs: number,
+    signal: AbortSignal,
+  ) => {
     const apiToken = (session as any)?.apiToken as string;
     const api = createApiClient(apiToken);
     let lastError: unknown;
@@ -131,14 +178,17 @@ export function ChallengePage({ params }: Props) {
     throw lastError;
   };
 
-  const handleAnswer = async (option: "A" | "B" | "C" | "D", reactionTimeMs: number) => {
+  const handleAnswer = async (
+    option: "A" | "B" | "C" | "D" | null,
+    reactionTimeMs: number,
+  ) => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
-    lastAnswerRef.current = { option, reactionTimeMs };
+    lastAnswerRef.current = option ? { option, reactionTimeMs } : null;
     setAnswerError(null);
     try {
       const score = await submitAnswer(option, reactionTimeMs, abortController.signal);

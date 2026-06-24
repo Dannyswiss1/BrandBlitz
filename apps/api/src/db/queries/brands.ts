@@ -20,11 +20,35 @@ export type BrandApi = Brand & {
   product_image_urls: string[];
 };
 
+/** Public-safe brand data. Owner identity and internal deletion metadata stay private. */
+export type PublicBrand = Pick<
+  Brand,
+  | "id"
+  | "name"
+  | "logo_url"
+  | "primary_color"
+  | "secondary_color"
+  | "tagline"
+  | "brand_story"
+  | "usp"
+  | "product_image_keys"
+  | "created_at"
+>;
+
 export function getProductImageUrls(brand: Pick<Brand, "product_image_keys">): string[] {
   return (brand.product_image_keys ?? []).map((key) => getPublicUrl(BUCKETS.BRAND_ASSETS, key));
 }
 
 export function toBrandApi(brand: Brand): BrandApi {
+  return {
+    ...brand,
+    product_image_urls: getProductImageUrls(brand),
+  };
+}
+
+export function toPublicBrandApi(brand: PublicBrand): PublicBrand & {
+  product_image_urls: string[];
+} {
   return {
     ...brand,
     product_image_urls: getProductImageUrls(brand),
@@ -64,6 +88,35 @@ export async function getBrandsByOwner(ownerUserId: string): Promise<Brand[]> {
 export async function getBrandById(id: string): Promise<Brand | null> {
   const result = await query<Brand>("SELECT * FROM brands WHERE id = $1 AND deleted_at IS NULL", [id]);
   return result.rows[0] ?? null;
+}
+
+export async function getPublicBrandById(id: string): Promise<PublicBrand | null> {
+  const result = await query<PublicBrand>(
+    `SELECT id, name, logo_url, primary_color, secondary_color, tagline,
+            brand_story, usp, product_image_keys, created_at
+     FROM brands WHERE id = $1 AND deleted_at IS NULL`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function getPublicBrands(limit = 50): Promise<PublicBrand[]> {
+  const result = await query<PublicBrand>(
+    `SELECT id, name, logo_url, primary_color, secondary_color, tagline,
+            brand_story, usp, product_image_keys, created_at
+     FROM brands b
+     WHERE b.deleted_at IS NULL
+       AND EXISTS (
+         SELECT 1 FROM challenges c
+         WHERE c.brand_id = b.id
+           AND c.status = 'active'
+           AND c.deleted_at IS NULL
+       )
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return result.rows;
 }
 
 export async function getBrandMetaById(

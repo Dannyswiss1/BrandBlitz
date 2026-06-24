@@ -1,5 +1,20 @@
 import { query } from "../index";
 
+export type PublicConfig = Record<string, Record<string, unknown>>;
+
+/**
+ * Return the complete runtime configuration exposed to clients. Keeping the
+ * mapping here gives the public endpoint a stable response regardless of
+ * whether it is read from Postgres or Redis.
+ */
+export async function getPublicConfig(): Promise<PublicConfig> {
+  const result = await query<{ key: string; value: Record<string, unknown> }>(
+    "SELECT key, value FROM app_config ORDER BY key"
+  );
+
+  return Object.fromEntries(result.rows.map(({ key, value }) => [key, value]));
+}
+
 export async function getConfig(key: string): Promise<Record<string, unknown> | null> {
   const result = await query<{ value: Record<string, unknown> }>(
     "SELECT value FROM app_config WHERE key = $1",
