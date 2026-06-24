@@ -154,3 +154,30 @@ export const webhookLimiter = rateLimit({
   legacyHeaders: false,
   store: new RedisStore({ sendCommand: (...args: string[]) => (redis as any).call(...args) }),
 });
+
+/**
+ * OTP phone limiter: 3 req / 15 min per phone number.
+ */
+export const phoneRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 3,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  passOnStoreError: true,
+  store: redisStore,
+  keyGenerator: (req) => {
+    const raw = typeof req.body?.phone === "string" ? req.body.phone.replace(/\D/g, "") : "";
+    return raw ? `phone:${raw}` : userAwareKey(req);
+  },
+  handler: (req, res, next, options) => {
+    const raw = typeof req.body?.phone === "string" ? req.body.phone.replace(/\D/g, "") : "";
+    const key = raw ? `phone:${raw}` : userAwareKey(req);
+    logger.warn("Rate limit exceeded", {
+      limiter: "phoneRateLimit",
+      key,
+      metric: "rate_limit.exceeded",
+    });
+    res.setHeader("Retry-After", Math.ceil(options.windowMs / 1000));
+    res.status(429).json({ error: "Too many verification attempts, please try again later" });
+  },
+});

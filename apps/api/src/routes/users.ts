@@ -21,7 +21,7 @@ import {
 import { authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
 import { redis } from "../lib/redis";
-import { apiLimiter } from "../middleware/rate-limit";
+import { apiLimiter, phoneRateLimit } from "../middleware/rate-limit";
 import { getBadgesForUser } from "../services/badges";
 import { config } from "../lib/config";
 
@@ -214,15 +214,9 @@ router.patch("/me/profile", authenticate, async (req, res) => {
  * POST /users/me/phone/send
  * Send SMS verification code via Twilio.
  */
-router.post("/me/phone/send", authenticate, async (req, res) => {
+router.post("/me/phone/send", authenticate, phoneRateLimit, async (req, res) => {
   const { phone } = z.object({ phone: z.string().min(1) }).parse(req.body);
   const normalizedPhone = normalizePhoneNumber(phone);
-
-  // Rate limit: 3 sends per phone per 5 minutes
-  const key = `phone:send:${normalizedPhone}`;
-  const sends = await redis.incr(key);
-  if (sends === 1) await redis.expire(key, 300);
-  if (sends > 3) throw createError("Too many verification attempts", 429);
 
   await sendVerificationCode(normalizedPhone);
   res.json({ success: true });
