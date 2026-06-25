@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { createApiClient, type Challenge, type ChallengeQuestion } from "@/lib/api";
 import { useFingerprint } from "@/hooks/use-fingerprint";
+import { useSoundEffects } from "@/hooks/use-sound-effects";
+import { SoundToggle } from "@/components/layout/sound-toggle";
 import { TOTAL_ROUNDS } from "@/components/game/constants";
 
 const WarmupPhase = dynamic(() => import("@/components/game/warmup-phase").then((m) => m.WarmupPhase), {
@@ -31,6 +33,7 @@ export function ChallengePage({ params }: Props) {
   const { data: session, status } = useSession();
   const router = useRouter();
   const visitorId = useFingerprint();
+  const { enabled: soundsEnabled, toggle: toggleSounds, correct: playCorrect, wrong: playWrong, tick: playTick } = useSoundEffects();
 
   const [challenge, setChallenge] = React.useState<Challenge | null>(null);
   const [questions, setQuestions] = React.useState<ChallengeQuestion[]>([]);
@@ -39,6 +42,7 @@ export function ChallengePage({ params }: Props) {
   const [challengeToken, setChallengeToken] = React.useState("");
   const [sessionId, setSessionId] = React.useState("");
   const [scores, setScores] = React.useState<number[]>([]);
+  const [finalRank, setFinalRank] = React.useState<number | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -117,7 +121,10 @@ export function ChallengePage({ params }: Props) {
           { selectedOption: option, reactionTimeMs },
           { signal }
         );
-        return res.data.score as number;
+        return {
+          score: res.data.score as number,
+          rank: (res.data.rank as number | null) ?? null,
+        };
       } catch (err: any) {
         if (err.name === "CanceledError" || err.message === "Aborted") {
           throw err;
@@ -141,9 +148,17 @@ export function ChallengePage({ params }: Props) {
     lastAnswerRef.current = { option, reactionTimeMs };
     setAnswerError(null);
     try {
-      const score = await submitAnswer(option, reactionTimeMs, abortController.signal);
+      const result = await submitAnswer(option, reactionTimeMs, abortController.signal);
       if (!mountedRef.current) return;
-      setScores((prev) => [...prev, score]);
+      if (result.score > 0) {
+        playCorrect();
+      } else {
+        playWrong();
+      }
+      setScores((prev) => [...prev, result.score]);
+      if (result.rank !== null) {
+        setFinalRank(result.rank);
+      }
       // Advance ONLY after the server confirms the round was scored.
       // Without this guarantee the `scores` array drifts out of sync
       // with the server's view of the session.
@@ -209,6 +224,9 @@ export function ChallengePage({ params }: Props) {
     if (!question) return null;
     return (
       <div className="min-h-screen p-6">
+        <div className="flex justify-end mb-4">
+          <SoundToggle enabled={soundsEnabled} onToggle={toggleSounds} />
+        </div>
         <ChallengeRound
           question={question}
           round={currentRound}
@@ -216,12 +234,21 @@ export function ChallengePage({ params }: Props) {
           brandLogoUrl={challenge.logo_url ?? undefined}
           answerError={answerError}
           onRetry={retryLastAnswer}
+          onTick={playTick}
         />
       </div>
     );
   }
   if (phase === "result") {
-    return <ResultScreen totalScore={scores.reduce((a, b) => a + b, 0)} challengeId={challengeId} />;
+    return (
+      <ResultScreen
+        totalScore={scores.reduce((a, b) => a + b, 0)}
+        challengeId={challengeId}
+        rank={finalRank ?? undefined}
+        primaryColor={challenge?.primary_color ?? undefined}
+        secondaryColor={challenge?.secondary_color ?? undefined}
+      />
+    );
   }
   return null;
 }
