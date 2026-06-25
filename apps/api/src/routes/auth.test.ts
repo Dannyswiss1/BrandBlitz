@@ -1,7 +1,7 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import authRouter from "./auth";
 import { createError, errorHandler } from "../middleware/error";
 import type { User } from "../db/queries/users";
@@ -10,11 +10,47 @@ const mocks = vi.hoisted(() => ({
   upsertUser: vi.fn(),
   findUserById: vi.fn(),
   verifyGoogleIdToken: vi.fn(),
+  ensureUserReferralCode: vi.fn(),
+  consumePendingReferralAttribution: vi.fn(),
+  redisGet: vi.fn(),
+  redisSet: vi.fn(),
+  redisSadd: vi.fn(),
+  redisExpire: vi.fn(),
+  redisSmembers: vi.fn(),
+  redisPipeline: vi.fn(),
 }));
+
+const TEST_JWT_SECRET = "test-jwt-secret";
+const TEST_JWT_REFRESH_SECRET = "test-refresh-secret";
 
 vi.mock("../db/queries/users", () => ({
   upsertUser: mocks.upsertUser,
   findUserById: mocks.findUserById,
+}));
+
+vi.mock("../services/referrals", () => ({
+  ensureUserReferralCode: mocks.ensureUserReferralCode,
+  consumePendingReferralAttribution: mocks.consumePendingReferralAttribution,
+}));
+
+vi.mock("../lib/redis", () => ({
+  redis: {
+    get: mocks.redisGet,
+    set: mocks.redisSet,
+    sadd: mocks.redisSadd,
+    expire: mocks.redisExpire,
+    smembers: mocks.redisSmembers,
+    pipeline: mocks.redisPipeline,
+    del: vi.fn(),
+  },
+}));
+
+vi.mock("../lib/config", () => ({
+  config: {
+    JWT_SECRET: "test-jwt-secret",
+    JWT_REFRESH_SECRET: "test-refresh-secret",
+    NODE_ENV: "test",
+  },
 }));
 
 vi.mock("../services/google-auth", () => ({
@@ -34,7 +70,7 @@ function createTestApp() {
 }
 
 function signAccessToken(user: Pick<User, "id" | "email">): string {
-  return jwt.sign({ sub: user.id, email: user.email }, process.env.JWT_SECRET!, {
+  return jwt.sign({ sub: user.id, email: user.email }, TEST_JWT_SECRET, {
     expiresIn: "15m",
   });
 }
@@ -42,7 +78,7 @@ function signAccessToken(user: Pick<User, "id" | "email">): string {
 function signRefreshToken(user: Pick<User, "id" | "email">): string {
   return jwt.sign(
     { sub: user.id, email: user.email, type: "refresh", jti: "seed-refresh-token" },
-    process.env.JWT_REFRESH_SECRET!,
+    TEST_JWT_REFRESH_SECRET,
     { expiresIn: "30d" }
   );
 }
@@ -76,14 +112,19 @@ const userFixture: User = {
 
 describe("auth routes", () => {
   beforeEach(() => {
-    process.env.JWT_SECRET = "test-jwt-secret-12345678901234567890";
-    process.env.JWT_REFRESH_SECRET = "test-refresh-secret-1234567890123456";
     vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    delete process.env.JWT_SECRET;
-    delete process.env.JWT_REFRESH_SECRET;
+    mocks.ensureUserReferralCode.mockResolvedValue("ABC123");
+    mocks.consumePendingReferralAttribution.mockResolvedValue(undefined);
+    mocks.redisGet.mockResolvedValue(null);
+    mocks.redisSet.mockResolvedValue("OK");
+    mocks.redisSadd.mockResolvedValue(1);
+    mocks.redisExpire.mockResolvedValue(1);
+    mocks.redisSmembers.mockResolvedValue([]);
+    mocks.redisPipeline.mockReturnValue({
+      set: vi.fn().mockReturnThis(),
+      del: vi.fn().mockReturnThis(),
+      exec: vi.fn().mockResolvedValue([]),
+    });
   });
 
   it("returns a JWT and refresh token for a valid Google token", async () => {
@@ -114,15 +155,16 @@ describe("auth routes", () => {
       username: userFixture.username,
       avatarUrl: userFixture.avatar_url,
       role: userFixture.role,
+      status: "active",
     });
 
-    const accessPayload = jwt.verify(response.body.token, process.env.JWT_SECRET!) as {
+    const accessPayload = jwt.verify(response.body.token, TEST_JWT_SECRET) as {
       sub: string;
       email: string;
     };
     const refreshPayload = jwt.verify(
       response.body.refreshToken,
-      process.env.JWT_REFRESH_SECRET!
+      TEST_JWT_REFRESH_SECRET
     ) as { sub: string; email: string; type: string };
 
     expect(accessPayload.sub).toBe(userFixture.id);
@@ -181,6 +223,7 @@ describe("auth routes", () => {
       username: userFixture.username,
       avatarUrl: userFixture.avatar_url,
       role: userFixture.role,
+      status: "active",
     });
     expect(response.body.user.google_id).toBeUndefined();
     expect(response.body.user.phone_hash).toBeUndefined();
@@ -198,7 +241,7 @@ describe("auth routes", () => {
     expect(response.body.token).not.toBe(refreshToken);
     expect(response.body.refreshToken).not.toBe(refreshToken);
 
-    const nextAccessPayload = jwt.verify(response.body.token, process.env.JWT_SECRET!) as {
+    const nextAccessPayload = jwt.verify(response.body.token, TEST_JWT_SECRET) as {
       sub: string;
       email: string;
     };

@@ -17,7 +17,7 @@
 
 import type { Request, Response } from "express";
 import { isIP } from "node:net";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import { redis } from "../lib/redis";
 import { logger } from "../lib/logger";
@@ -97,11 +97,11 @@ function userAwareKey(req: Request): string {
   if (req.user?.sub) {
     return `user:${req.user.sub}`;
   }
-  return `ip:${normalizeClientIp(req.ip)}`;
+  return `ip:${ipKeyGenerator(req.ip)}`;
 }
 
 function ipKey(req: Request): string {
-  return `ip:${normalizeClientIp(req.ip)}`;
+  return `ip:${ipKeyGenerator(req.ip)}`;
 }
 
 // ── Redis store ───────────────────────────────────────────────────────────────

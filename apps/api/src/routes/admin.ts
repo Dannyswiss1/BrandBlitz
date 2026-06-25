@@ -32,7 +32,7 @@ router.get("/archive/challenges/:id", async (req, res) => {
 /**
  * GET /admin/dlq
  * List jobs currently sitting in every dead-letter queue so operators can
- * inspect failures that exhausted all retries. Optional `?queue=payout:dlq`
+ * inspect failures that exhausted all retries. Optional `?queue=payout-dlq`
  * narrows to a single DLQ.
  */
 router.get("/dlq", async (req, res) => {

@@ -10,8 +10,6 @@ const router = Router();
 router.use(authenticate);
 router.use(requireAdmin);
 
-import { z } from "zod";
-
 const KnownConfigSchema = z.discriminatedUnion("key", [
   z.object({
     key: z.literal("anti_cheat"),

@@ -25,10 +25,11 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCount
     // Derive start time from the server deadline when available so that the
     // client clock is anchored to the authoritative deadline, not to when the
     // component mounted.
-    const startTime = deadlineAt != null ? Date.now() - (totalMs - (deadlineAt - Date.now())) : Date.now();
+    let startTime = deadlineAt != null ? Date.now() - (totalMs - (deadlineAt - Date.now())) : Date.now();
 
     let intervalId: ReturnType<typeof setInterval> | null = null;
     let hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    let hiddenAt: number | null = hidden ? Date.now() : null;
 
     function getRemaining(): number {
       if (deadlineAt != null) {
@@ -67,9 +68,14 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCount
     function handleVisibilityChange() {
       if (document.visibilityState === "hidden") {
         hidden = true;
+        hiddenAt = Date.now();
         stopInterval();
       } else {
         hidden = false;
+        if (deadlineAt == null && hiddenAt != null) {
+          startTime += Date.now() - hiddenAt;
+        }
+        hiddenAt = null;
         // Re-sync immediately on restore so the displayed time jumps to the
         // correct value before the next interval tick.
         tick();

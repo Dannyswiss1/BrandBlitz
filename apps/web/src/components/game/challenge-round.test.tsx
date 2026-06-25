@@ -123,7 +123,7 @@ describe("ChallengeRound", () => {
 
     const img = container.querySelector('img[alt="Brand prompt"]') as HTMLImageElement;
     expect(img).not.toBeNull();
-    expect(img.src).toBe("https://example.com/logo.png");
+    expect(img).toHaveAttribute("src", "https://example.com/logo.png");
   });
 
   it("renders product image when prompt_type is 'productImage1' and brandProductImageUrl is provided", () => {
@@ -141,7 +141,7 @@ describe("ChallengeRound", () => {
 
     const img = container.querySelector('img[alt="Product prompt"]') as HTMLImageElement;
     expect(img).not.toBeNull();
-    expect(img.src).toBe("https://example.com/product.png");
+    expect(img).toHaveAttribute("src", "https://example.com/product.png");
   });
 
   it("does not render images when prompt_type does not match or URLs are missing", () => {

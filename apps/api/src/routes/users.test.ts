@@ -55,6 +55,16 @@ vi.mock("../middleware/rate-limit", () => ({
   challengeStartLimiter: (_req: any, _res: any, next: any) => next(),
   uploadLimiter: (_req: any, _res: any, next: any) => next(),
   webhookLimiter: (_req: any, _res: any, next: any) => next(),
+  phoneRateLimit: async (req: any, res: any, next: any) => {
+    const key = `phone:send:${req.body?.phone}`;
+    const attempts = await mockRedisIncr(key);
+    if (attempts === 1) await mockRedisExpire(key, 300);
+    if (attempts > 3) {
+      res.status(429).json({ error: "Too many verification attempts, please try again later" });
+      return;
+    }
+    next();
+  },
 }));
 
 vi.mock("@brandblitz/stellar", () => ({

@@ -10,9 +10,12 @@ const mocks = vi.hoisted(() => ({
   getLeaderboard: vi.fn(),
   createPayout: vi.fn(),
   updatePayoutStatus: vi.fn(),
+  incrementUserEarnings: vi.fn(),
+  queueReferralBonusForPayout: vi.fn(),
   submitBatchPayout: vi.fn(),
   isRetriableStellarError: vi.fn(),
   queueAdd: vi.fn(),
+  enqueueLeaderboardRefresh: vi.fn(),
   emitCounterMetric: vi.fn(),
   verifySessionHmac: vi.fn().mockReturnValue(true),
   metricsInc: vi.fn(),
@@ -37,18 +40,33 @@ vi.mock("../db/queries/payouts", () => ({
   updatePayoutStatus: mocks.updatePayoutStatus,
 }));
 
+vi.mock("../db/queries/users", () => ({
+  incrementUserEarnings: mocks.incrementUserEarnings,
+}));
+
+vi.mock("./referrals", () => ({
+  queueReferralBonusForPayout: mocks.queueReferralBonusForPayout,
+}));
+
 vi.mock("@brandblitz/stellar", () => ({
   submitBatchPayout: mocks.submitBatchPayout,
   isRetriableStellarError: mocks.isRetriableStellarError,
+  EscrowClient: vi.fn(),
 }));
 
 vi.mock("../queues/payout.queue", () => ({
   payoutQueue: {
     add: mocks.queueAdd,
   },
+  payoutJobOptions: { attempts: 3 },
+}));
+
+vi.mock("../queues/leaderboard-refresh.queue", () => ({
+  enqueueLeaderboardRefresh: mocks.enqueueLeaderboardRefresh,
 }));
 
 vi.mock("../lib/redis", () => ({
+  redis: {},
   emitCounterMetric: mocks.emitCounterMetric,
   stellarSequenceStore: {
     get: vi.fn(),
@@ -309,8 +327,8 @@ describe("processPayout", () => {
     mocks.getChallengeById.mockResolvedValue({
       ...challengeFixture,
       id: "challenge-5",
-      pool_amount_stroops: "1",
-      pool_amount_usdc: "0.0000001",
+      pool_amount_stroops: "2",
+      pool_amount_usdc: "0.0000002",
     });
     mocks.getLeaderboard.mockResolvedValue([
       buildLeaderboardSession({ id: "session-1", user_id: "user-1", total_score: 9999999, stellar_address: "GUSER1" }),

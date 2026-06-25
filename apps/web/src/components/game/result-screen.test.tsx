@@ -55,7 +55,7 @@ describe("ResultScreen", () => {
     expect(screen.getByText(/\b12,345\b/)).toBeInTheDocument();
     expect(screen.getByText("Rank #7")).toBeInTheDocument();
     expect(screen.getByText("Estimated earnings")).toBeInTheDocument();
-    expect(screen.getByText("$42.50 USDC")).toBeInTheDocument();
+    expect(screen.getByText("42.50 USDC")).toBeInTheDocument();
   });
 
   it("hides optional rank and earnings details when they are not provided", () => {
@@ -81,7 +81,7 @@ describe("ResultScreen", () => {
     await user.click(screen.getByRole("button", { name: "Share Result" }));
 
     expect(share).toHaveBeenCalledWith({
-      text: "I just scored 1,500 in a BrandBlitz challenge and earned ~$10.00 USDC! 🏆",
+      text: "I just scored 1,500 in a BrandBlitz challenge and earned ~10.00 USDC! 🏆",
       url: "http://localhost:3000/challenge/challenge-123/results",
     });
     expect(clipboardWrite).not.toHaveBeenCalled();

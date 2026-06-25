@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getLeaderboard: vi.fn(),
   redisGet: vi.fn(),
   redisSet: vi.fn(),
+  redisDel: vi.fn(),
   dbQueryCount: { value: 0 },
 }));
 
@@ -38,6 +39,7 @@ vi.mock("../lib/redis", () => ({
   redis: {
     get: mocks.redisGet,
     set: mocks.redisSet,
+    del: mocks.redisDel,
   },
 }));
 
@@ -102,6 +104,7 @@ describe("GET /leaderboard/global", () => {
     mocks.dbQueryCount.value = 0;
     mocks.redisGet.mockResolvedValue(null);
     mocks.redisSet.mockResolvedValue("OK");
+    mocks.redisDel.mockResolvedValue(1);
     mocks.getActiveChallenges.mockResolvedValue(CHALLENGES);
     mocks.getGlobalLeaderboardFromView.mockResolvedValue(VIEW_ROWS);
   });

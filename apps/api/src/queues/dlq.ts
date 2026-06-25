@@ -22,7 +22,7 @@ import { leagueQueue } from "./league.queue";
  * observable signal for on-call engineers.
  *
  * To close that gap, each producing worker forwards a job to a named
- * dead-letter queue (`<queue>:dlq`) the moment it exhausts all attempts. A
+ * dead-letter queue (`<queue>-dlq`) the moment it exhausts all attempts. A
  * dedicated DLQ worker then reconciles the database (marking the stranded row
  * `failed`) and writes an `audit_log` record so the failure is triageable.
  *
@@ -40,9 +40,9 @@ export const dlqJobOptions = {
   attempts: 1,
 } satisfies JobsOptions;
 
-export const PAYOUT_DLQ_NAME = "payout:dlq";
-export const REFERRAL_BONUS_DLQ_NAME = "referral-bonus:dlq";
-export const LEAGUE_DLQ_NAME = "league:dlq";
+export const PAYOUT_DLQ_NAME = "payout-dlq";
+export const REFERRAL_BONUS_DLQ_NAME = "referral-bonus-dlq";
+export const LEAGUE_DLQ_NAME = "league-dlq";
 
 export const payoutDlqQueue = new Queue(PAYOUT_DLQ_NAME, {
   connection: redis,

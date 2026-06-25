@@ -48,7 +48,7 @@ function BadgeItem({ badge, isNew }: { badge: Badge; isNew: boolean }) {
         badge.earned ? "border-[var(--primary)] shadow-md" : "border-[var(--border)] opacity-40 grayscale",
         isNew && !prefersReduced ? "animate-bounce" : "",
       ].join(" ")}>
-        <Image src={badge.iconUrl} alt={badge.name} fill sizes="56px" className="rounded-full object-cover" />
+        <Image src={badge.iconUrl} alt="" fill sizes="56px" className="rounded-full object-cover" />
         {!badge.earned && (
           <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/30">
             <LockIcon />

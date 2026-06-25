@@ -41,13 +41,13 @@ function getImageRemotePatterns() {
       protocol: "http" as const,
       hostname: "localhost",
       port: "9000",
-      pathname: "/**",
+      pathname: "/brandblitz/**",
     },
     {
       protocol: "http" as const,
       hostname: "127.0.0.1",
       port: "9000",
-      pathname: "/**",
+      pathname: "/brandblitz/**",
     }
   );
 
@@ -57,16 +57,16 @@ function getImageRemotePatterns() {
     patterns.push({
       protocol: "https" as const,
       hostname: cdnHost,
-      pathname: "/**",
+      pathname: "/brandblitz/**",
     });
   }
 
   // Fallback to the legacy assets.brandblitz.app for backward compatibility
-  if (!cdnHost && process.env.NODE_ENV === "production") {
+  if (!cdnHost) {
     patterns.push({
       protocol: "https" as const,
       hostname: "assets.brandblitz.app",
-      pathname: "/**",
+      pathname: "/brandblitz/**",
     });
   }
 

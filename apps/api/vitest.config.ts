@@ -8,6 +8,7 @@ const sharedSetupFile = path.resolve(projectRoot, "../../tests/setup.ts");
 export default defineProject({
   resolve: {
     alias: {
+      "@": path.resolve(projectRoot, "src"),
       "@brandblitz/storage": path.resolve(projectRoot, "../../packages/storage/src"),
       "@brandblitz/stellar": path.resolve(projectRoot, "../../packages/stellar/src"),
     },

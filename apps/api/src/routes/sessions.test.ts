@@ -51,6 +51,9 @@ vi.mock("../middleware/anti-cheat", () => ({
 vi.mock("../middleware/rate-limit", () => ({
   challengeStartLimiter: (req: any, res: any, next: any) => next(),
 }));
+vi.mock("../middleware/require-active-user", () => ({
+  requireActiveUser: (_req: any, _res: any, next: any) => next(),
+}));
 vi.mock("../lib/integrity", () => ({
   computeSessionHmac: vi.fn().mockReturnValue("test-hmac"),
 }));
@@ -59,6 +62,9 @@ vi.mock("@brandblitz/stellar", () => ({
 }));
 vi.mock("../services/streaks", () => ({
   updateStreak: vi.fn(),
+}));
+vi.mock("../services/badges", () => ({
+  checkAndAwardSessionBadges: vi.fn(),
 }));
 
 import * as challengeQueries from "../db/queries/challenges";

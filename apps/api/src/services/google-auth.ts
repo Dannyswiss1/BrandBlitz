@@ -1,7 +1,6 @@
 import { createError } from "../middleware/error";
 import { config } from "../lib/config";
 import { z } from "zod";
-import { config } from "../lib/config";
 
 const GoogleTokenInfoSchema = z.object({
   sub: z.string().min(1),

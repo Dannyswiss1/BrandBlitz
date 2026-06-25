@@ -65,7 +65,7 @@ export function errorHandler(
     }));
   }
 
-  if (config.NODE_ENV === "development" && err.stack) {
+  if ((process.env.NODE_ENV ?? config.NODE_ENV) === "development" && err.stack) {
     payload.stack = err.stack;
   }
 

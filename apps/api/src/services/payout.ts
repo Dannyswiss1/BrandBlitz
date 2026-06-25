@@ -143,35 +143,6 @@ export async function processPayout(challengeId: string): Promise<void> {
   }
 
   const network = config.STELLAR_NETWORK as NetworkName;
-  let results;
-  try {
-    results = await submitBatchPayout(
-      recipients,
-      config.HOT_WALLET_SECRET,
-      challengeId,
-      network,
-      {
-        onInvalidRecipient: (recipient, reason) => {
-          logger.error("Invalid payout recipient skipped", {
-            challengeId,
-            address: recipient.address,
-            amount: recipient.amount,
-            reason,
-          });
-        },
-      }
-    );
-  } catch (error) {
-    if (isRetriableStellarError(error)) {
-      logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
-        challengeId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-
-    throw error;
-  }
 
   // Use escrow contract for settlement if CONTRACT_ID is configured
   if (config.SOROBAN_CONTRACT_ID) {
@@ -217,13 +188,36 @@ export async function processPayout(challengeId: string): Promise<void> {
   }
 
   // Fallback: direct payout via hot-wallet
-  const results = await submitBatchPayout(
-    recipients,
-    config.HOT_WALLET_SECRET,
-    challengeId,
-    network,
-    { sequenceStore: stellarSequenceStore },
-  );
+  let results;
+  try {
+    results = await submitBatchPayout(
+      recipients,
+      config.HOT_WALLET_SECRET,
+      challengeId,
+      network,
+      {
+        sequenceStore: stellarSequenceStore,
+        onInvalidRecipient: (recipient, reason) => {
+          logger.error("Invalid payout recipient skipped", {
+            challengeId,
+            address: recipient.address,
+            amount: recipient.amount,
+            reason,
+          });
+        },
+      },
+    );
+  } catch (error) {
+    if (isRetriableStellarError(error)) {
+      logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    throw error;
+  }
 
   const txHashes: string[] = [];
   let hasFailure = false;
@@ -247,8 +241,6 @@ export async function processPayout(challengeId: string): Promise<void> {
           record.id,
           status,
           result.txHash || undefined,
-          result.success ? undefined : result.error
-        );
           errorMessage,
         );
         if (result.success) {

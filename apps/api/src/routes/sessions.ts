@@ -175,8 +175,28 @@ router.post(
     if (session.user_id !== req.user!.sub) throw createError("Forbidden", 403);
     if (!session.challenge_started_at) throw createError("Challenge not started", 400);
 
-    // Edge Cases
-    if (session.completed_at) throw createError("Session already completed", 409);
+    const getQuestion = async () => {
+      const questions = await getChallengeQuestions(challenge.id);
+      const question = questions.find((q) => q.round === round);
+      if (!question) throw createError("Question not found", 404);
+      return question;
+    };
+
+    // Idempotent round-3 replay: return cached result if answer matches; reject if it differs.
+    if (session.completed_at) {
+      if (round !== 3) throw createError("Session already completed", 409);
+      const question = await getQuestion();
+      if (session.round_3_answer !== body.selectedOption) {
+        throw createError("Answer conflict detected", 409, "CONFLICT_REPLAY");
+      }
+      return res.json({
+        correct: validateAnswer(question, body.selectedOption),
+        score: session.round_3_score,
+        round: 3,
+        total_score: session.total_score,
+        rank: session.rank ?? null,
+      });
+    }
     if ((session as any).is_flagged || session.flagged) {
       throw createError("Session flagged for review", 403);
     }
@@ -187,25 +207,7 @@ router.post(
       throw createError("Round already answered", 400);
     }
 
-    // Get the server-stored question for this round
-    const questions = await getChallengeQuestions(challenge.id);
-    const question = questions.find((q) => q.round === round);
-    if (!question) throw createError("Question not found", 404);
-
-
-  // Idempotent round-3 replay: return cached result if answer matches; reject if it differs
-  if (session.completed_at && round === 3) {
-    if (session.round_3_answer !== body.selectedOption) {
-      throw createError("Answer conflict detected", 409, "CONFLICT_REPLAY");
-    }
-    return res.json({
-      correct: validateAnswer(question, body.selectedOption),
-      score: session.round_3_score,
-      round: 3,
-      total_score: session.total_score,
-      rank: session.rank ?? null,
-    });
-  }
+    const question = await getQuestion();
 
   const score = calculateRoundScore({
     selectedOption: body.selectedOption,
@@ -229,6 +231,10 @@ router.post(
           total_score: completed.total_score,
           is_practice: completed.is_practice,
         });
+      }
+      const token = bearerToken(req);
+      if (token) {
+        await revokeSessionToken(session.id, token, req.user!.exp);
       }
     }
   }

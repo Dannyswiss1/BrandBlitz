@@ -26,6 +26,8 @@ vi.mock("../middleware/rate-limit", () => ({
   authLimiter: (_req: any, _res: any, next: any) => next(),
   challengeStartLimiter: (_req: any, _res: any, next: any) => next(),
   uploadLimiter: (_req: any, _res: any, next: any) => next(),
+  phoneRateLimit: (_req: any, _res: any, next: any) => next(),
+  webhookLimiter: (_req: any, _res: any, next: any) => next(),
 }));
 
 vi.mock("@brandblitz/storage", () => ({
@@ -34,6 +36,7 @@ vi.mock("@brandblitz/storage", () => ({
     BRAND_ASSETS: "brand-assets",
     SHARE_CARDS: "share-cards",
   },
+  PRESIGNED_URL_TTL_SECONDS: 60,
   getPublicUrl: mockGetPublicUrl,
 }));
 

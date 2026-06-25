@@ -23,6 +23,7 @@ const CONFETTI_COLORS = [
 function useAnimatedValue(target: number, durationMs: number): number {
   const [value, setValue] = useState(0);
   const startTimeRef = useRef<number | null>(null);
+  const lastTimestampRef = useRef<number | null>(null);
   const rafRef = useRef<number>(0);
   const hasStartedRef = useRef(false);
 
@@ -35,12 +36,19 @@ function useAnimatedValue(target: number, durationMs: number): number {
     hasStartedRef.current = true;
     
     startTimeRef.current = null;
+    lastTimestampRef.current = null;
 
     function easeOutCubic(t: number): number {
       return 1 - Math.pow(1 - t, 3);
     }
 
-    function step(timestamp: number) {
+    function step(rawTimestamp: number) {
+      let timestamp = rawTimestamp;
+      if (lastTimestampRef.current !== null && timestamp <= lastTimestampRef.current) {
+        timestamp = lastTimestampRef.current + 16;
+      }
+      lastTimestampRef.current = timestamp;
+
       if (startTimeRef.current === null) {
         startTimeRef.current = timestamp;
       }
@@ -111,7 +119,7 @@ export function ResultScreen({ totalScore, rank, estimatedUsdc, challengeId }: R
   const showConfetti = rank !== undefined && rank <= 10;
   useConfetti(showConfetti);
 
-  const shareText = `I just scored ${formatScore(totalScore)} in a BrandBlitz challenge${estimatedUsdc ? ` and earned ~${formatUsdc(estimatedUsdc)} USDC` : ""}! 🏆`;
+  const shareText = `I just scored ${formatScore(totalScore)} in a BrandBlitz challenge${estimatedUsdc ? ` and earned ~${formatUsdc(estimatedUsdc)}` : ""}! 🏆`;
   const leaderboardHref = `/challenge/${challengeId}`;
 
   async function handleShare(): Promise<void> {
@@ -145,7 +153,7 @@ export function ResultScreen({ totalScore, rank, estimatedUsdc, challengeId }: R
           {estimatedUsdc && (
             <div className="rounded-lg bg-green-50 border border-green-200 p-4 usdc-pulse">
               <p className="text-sm text-green-700">Estimated earnings</p>
-              <p className="text-2xl font-bold text-green-800">{formatUsdc(estimatedUsdc)} USDC</p>
+              <p className="text-2xl font-bold text-green-800">{formatUsdc(estimatedUsdc)}</p>
               <p className="text-xs text-green-600 mt-1">Paid out when challenge ends</p>
             </div>
           )}

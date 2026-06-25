@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@auth/core": "0.34.3",
+    "@fingerprintjs/fingerprintjs-pro-react": "^2.7.1",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-progress": "1.1.4",
     "@radix-ui/react-slot": "1.2.4",
