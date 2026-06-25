@@ -241,3 +241,21 @@ export const phoneRateLimit = rateLimit({
     res.status(429).json({ error: "Too many verification attempts, please try again later" });
   },
 });
+
+/**
+ * Webhook rotation endpoints: 10 req / hour per admin user.
+ * Prevents abuse of secret rotation.
+ */
+export const webhookRotationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: userAwareKey,
+  passOnStoreError: true,
+  store: redisStore,
+  handler: (req, res) => {
+    record429("webhookRotationLimiter", userAwareKey(req));
+    res.status(429).json({ error: "Too many webhook rotation requests" });
+  },
+});
