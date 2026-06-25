@@ -74,6 +74,37 @@ export function ChallengePage({ params }: Props) {
     })();
   }, [challengeId, session, status, router, visitorId]);
 
+  // #557 — Preload first round images during warmup
+  React.useEffect(() => {
+    if (phase !== "warmup" || !challenge || questions.length === 0) return;
+
+    const links: HTMLLinkElement[] = [];
+    const imageUrls: string[] = [];
+
+    const firstQuestion = questions[0];
+    if (firstQuestion) {
+      if (firstQuestion.prompt_type === "logo" && challenge.logo_url) {
+        imageUrls.push(challenge.logo_url);
+      }
+    }
+
+    for (const url of imageUrls) {
+      const link = document.createElement("link");
+      link.rel = "preload";
+      link.as = "image";
+      link.href = url;
+      link.fetchPriority = "high";
+      document.head.appendChild(link);
+      links.push(link);
+    }
+
+    return () => {
+      for (const link of links) {
+        document.head.removeChild(link);
+      }
+    };
+  }, [phase, challenge, questions]);
+
   const handleWarmupComplete = (token: string) => {
     setChallengeToken(token);
     setPhase("challenge");

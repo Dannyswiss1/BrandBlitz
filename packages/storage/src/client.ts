@@ -32,10 +32,15 @@ export type BucketKey = (typeof BUCKETS)[keyof typeof BUCKETS];
 
 /**
  * Returns the publicly accessible URL for a stored object.
+ * When CDN_BASE_URL is set, returns a CDN-prefixed URL.
  * In dev: http://localhost:9000/brand-assets/logos/uuid.webp
  * In prod: https://assets.brandblitz.app/logos/uuid.webp
  */
 export function getPublicUrl(bucket: string, key: string): string {
+  const cdnBase = process.env.CDN_BASE_URL;
+  if (cdnBase) {
+    return `${cdnBase}/${bucket}/${key}`;
+  }
   const base = process.env.S3_PUBLIC_URL || process.env.S3_ENDPOINT || "";
   return `${base}/${bucket}/${key}`;
 }

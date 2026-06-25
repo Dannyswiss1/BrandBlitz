@@ -7,6 +7,7 @@ import {
   getGlobalLeaderboardFromView,
 } from "../db/queries/sessions";
 import { withCoalescing } from "../lib/cache";
+import { CursorQuerySchema } from "../db/pagination";
 
 const router = Router();
 
@@ -35,7 +36,7 @@ router.get("/stream", async (req, res) => {
 
   const sendSnapshot = async () => {
     if (challengeId) {
-      const sessions = await getLeaderboard(challengeId, 100, 0);
+      const { sessions } = await getLeaderboard(challengeId, 100);
       writeSse(res, {
         challengeId,
         sessions: sessions.map((s, i) => ({
@@ -54,7 +55,7 @@ router.get("/stream", async (req, res) => {
       return;
     }
 
-    const challenges = await getActiveChallenges(10);
+    const { challenges } = await getActiveChallenges(10);
     const challengeIds = challenges.map((c) => c.id);
     const topSessions = await getTopSessionsPerChallenge(challengeIds, 10);
 
@@ -102,20 +103,17 @@ router.get("/stream", async (req, res) => {
  * Single aggregated query via ROW_NUMBER() — no N+1.
  */
 router.get("/global", async (req, res) => {
-  const { limit, offset } = z.object({
-    limit: z.coerce.number().min(1).max(100).default(50),
-    offset: z.coerce.number().min(0).default(0),
-  }).parse(req.query);
+  const { limit } = CursorQuerySchema.parse(req.query);
 
-  const response = await withCoalescing(`leaderboard:global:${limit}:${offset}`, 300, async () => {
-    const challenges = await getActiveChallenges(10);
+  const response = await withCoalescing(`leaderboard:global:${limit}`, 300, async () => {
+    const { challenges } = await getActiveChallenges(10);
     const challengeIds = challenges.map((c) => c.id);
 
     // Cold path: query the pre-computed materialised view instead of a raw
     // aggregate scan, so cache misses are no longer expensive.
     const viewRows = await getGlobalLeaderboardFromView(challengeIds, 10);
 
-    const allSessions = viewRows.map((s) => ({
+    const leaderboard = viewRows.map((s) => ({
       rank: s.rank,
       challengeId: s.challenge_id,
       userId: s.user_id,
@@ -127,16 +125,9 @@ router.get("/global", async (req, res) => {
       totalEarned: s.total_earned_usdc,
     }));
 
-    const leaderboard = allSessions.slice(offset, offset + limit);
-
     return {
       leaderboard,
       cachedAt: new Date().toISOString(),
-      pagination: {
-        limit,
-        offset,
-        hasMore: offset + leaderboard.length < allSessions.length,
-      },
     };
   });
 
@@ -145,18 +136,16 @@ router.get("/global", async (req, res) => {
 
 /**
  * GET /leaderboard/:challengeId
+ * Paginated leaderboard for a challenge. Supports keyset cursor pagination.
  */
 router.get("/:challengeId", async (req, res) => {
-  const { limit, offset } = z.object({
-    limit: z.coerce.number().default(20),
-    offset: z.coerce.number().default(0),
-  }).parse(req.query);
+  const { limit, cursor } = CursorQuerySchema.parse(req.query);
 
-  const sessions = await getLeaderboard(req.params.challengeId, limit, offset);
+  const result = await getLeaderboard(req.params.challengeId, limit, cursor);
 
   res.json({
-    sessions: sessions.map((s, i) => ({
-      rank: offset + i + 1,
+    nextCursor: result.nextCursor,
+    sessions: result.sessions.map((s) => ({
       userId: s.user_id,
       username: s.username,
       displayName: s.display_name,

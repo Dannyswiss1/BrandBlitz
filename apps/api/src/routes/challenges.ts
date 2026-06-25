@@ -12,26 +12,24 @@ import { optionalAuth, authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
 import { withCoalescing } from "../lib/cache";
 import { config } from "../lib/config";
+import { CursorQuerySchema } from "../db/pagination";
 
 const router = Router();
 
-const PaginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  offset: z.coerce.number().int().min(0).default(0),
-  brandId: z.string().uuid().optional(),
-});
-
 /**
  * GET /challenges
- * List active challenges (public).
+ * List active challenges (public). Supports keyset cursor pagination via ?cursor.
+ * Legacy ?offset parameter is accepted but ignored; clients should migrate to ?cursor.
  */
 router.get("/", optionalAuth, async (req, res) => {
-  const parsed = PaginationSchema.safeParse(req.query);
+  const parsed = CursorQuerySchema.extend({
+    brandId: z.string().uuid().optional(),
+  }).safeParse(req.query);
   if (!parsed.success) {
     throw createError("Invalid query parameters", 400, "INVALID_QUERY");
   }
 
-  const { brandId, limit, offset } = parsed.data;
+  const { brandId, limit, cursor } = parsed.data;
 
   if (brandId) {
     const brand = await getBrandById(brandId);
@@ -39,17 +37,17 @@ router.get("/", optionalAuth, async (req, res) => {
       throw createError("Forbidden", 403);
     }
 
-    const challenges = await getChallengesByBrandId(brandId, limit, offset);
-    res.json({ challenges });
+    const { challenges, nextCursor } = await getChallengesByBrandId(brandId, limit, cursor);
+    res.json({ challenges, nextCursor });
     return;
   }
 
-  const challenges = await withCoalescing(
-    `challenges:active:${limit}:${offset}`,
+  const { challenges, nextCursor } = await withCoalescing(
+    `challenges:active:${limit}:${cursor ?? "first"}`,
     60,
-    () => getActiveChallenges(limit, offset)
+    () => getActiveChallenges(limit, cursor)
   );
-  res.json({ challenges });
+  res.json({ challenges, nextCursor });
 });
 
 /**
@@ -69,21 +67,21 @@ router.get("/:id", optionalAuth, async (req, res) => {
 
 /**
  * GET /challenges/:id/leaderboard
- * Paginated leaderboard for a challenge.
+ * Paginated leaderboard for a challenge. Supports keyset cursor pagination.
  */
 router.get("/:id/leaderboard", async (req, res) => {
   const challenge = await getChallengeByIdAny(req.params.id);
   if (!challenge) throw createError("Challenge not found", 404);
 
-  const { limit, offset } = PaginationSchema.parse(req.query);
-  const sessions = challenge.archived
-    ? await getArchivedLeaderboard(challenge.id, limit, offset)
-    : await getLeaderboard(challenge.id, limit, offset);
+  const { limit, cursor } = CursorQuerySchema.parse(req.query);
+  const result = challenge.archived
+    ? await getArchivedLeaderboard(challenge.id, limit, cursor)
+    : await getLeaderboard(challenge.id, limit, cursor);
 
   res.json({
     challengeId: challenge.id,
-    sessions: sessions.map((s, i) => ({
-      rank: offset + i + 1,
+    nextCursor: result.nextCursor,
+    sessions: result.sessions.map((s, i) => ({
       userId: s.user_id,
       username: s.username,
       displayName: s.display_name,

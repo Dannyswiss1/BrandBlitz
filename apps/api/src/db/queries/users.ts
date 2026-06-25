@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool, query } from "../index";
+import { encodeCursor, decodeCursorSafe } from "../pagination";
 
 export interface User {
   id: string;
@@ -371,10 +372,10 @@ export async function unsuspendUser(userId: string): Promise<User | null> {
 export async function listUsers(opts: {
   status?: "active" | "suspended";
   search?: string;
-  page?: number;
+  cursor?: string;
   pageSize?: number;
-}): Promise<{ users: User[]; total: number }> {
-  const { status, search, page = 1, pageSize = 20 } = opts;
+}): Promise<{ users: User[]; total: number; nextCursor: string | null }> {
+  const { status, search, cursor, pageSize = 20 } = opts;
   const conditions: string[] = ["deleted_at IS NULL"];
   const params: (string | number)[] = [];
   let paramIdx = 1;
@@ -393,22 +394,53 @@ export async function listUsers(opts: {
     paramIdx++;
   }
 
+  const cursorValues = decodeCursorSafe(cursor, ["suspended_at", "created_at", "id"]);
+
+  if (cursorValues) {
+    const suspendedAt = cursorValues.suspended_at;
+    const createdAt = cursorValues.created_at;
+    const id = cursorValues.id as string;
+
+    if (suspendedAt === null) {
+      conditions.push(
+        `(suspended_at IS NULL AND (created_at < $${paramIdx} OR (created_at = $${paramIdx} AND id < $${paramIdx + 1})))`,
+      );
+      params.push(createdAt as string, id);
+      paramIdx += 2;
+    } else {
+      conditions.push(
+        `(suspended_at IS NOT NULL AND (suspended_at < $${paramIdx} OR (suspended_at = $${paramIdx} AND created_at < $${paramIdx + 1}) OR (suspended_at = $${paramIdx} AND created_at = $${paramIdx + 1} AND id < $${paramIdx + 2})))`,
+      );
+      params.push(suspendedAt as string, createdAt as string, id);
+      paramIdx += 3;
+    }
+  }
+
   const where = conditions.join(" AND ");
-  const offset = (page - 1) * pageSize;
 
   const countResult = await query<{ count: string }>(
     `SELECT COUNT(*) AS count FROM users WHERE ${where}`,
-    params,
+    params.slice(0, cursorValues ? paramIdx - (cursorValues.suspended_at === null ? 2 : 3) : paramIdx - 1),
   );
   const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
 
-  const dataParams = [...params, pageSize, offset];
+  params.push(pageSize);
   const result = await query<User>(
     `SELECT * FROM users WHERE ${where}
-     ORDER BY suspended_at DESC NULLS LAST, created_at DESC
-     LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-    dataParams,
+     ORDER BY suspended_at DESC NULLS LAST, created_at DESC, id DESC
+     LIMIT $${paramIdx}`,
+    params,
   );
 
-  return { users: result.rows, total };
+  const users = result.rows;
+  const nextCursor: string | null =
+    users.length === pageSize
+      ? encodeCursor({
+          suspended_at: users[users.length - 1].suspended_at,
+          created_at: users[users.length - 1].created_at,
+          id: users[users.length - 1].id,
+        })
+      : null;
+
+  return { users, total, nextCursor };
 }
