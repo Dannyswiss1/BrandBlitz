@@ -10,6 +10,7 @@ import {
   toBrandApi,
   updateBrand,
   deleteBrand,
+  getBrandChallengeStats,
 } from "../db/queries/brands";
 import {
   createChallenge,
@@ -22,6 +23,7 @@ import { requireCurrentTosAccepted } from "../middleware/require-tos";
 import { createError } from "../middleware/error";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
+import { MIN_POOL_STROOPS } from "@brandblitz/stellar";
 
 const router = Router();
 
@@ -43,7 +45,19 @@ const BrandKitSchema = z.object({
 
 const ChallengeSchema = z.object({
   brandId: z.string().uuid(),
-  poolAmountUsdc: z.string().regex(/^\d+(\.\d{1,7})?$/),
+  poolAmountUsdc: z
+    .string()
+    .regex(/^\d+(\.\d{1,7})?$/)
+    .refine(
+      (val) => {
+        // Convert USDC amount to stroops and check minimum
+        const stroops = Math.round(parseFloat(val) * 10_000_000);
+        return stroops >= MIN_POOL_STROOPS;
+      },
+      {
+        message: `Pool amount must be at least 100 USDC (${MIN_POOL_STROOPS.toLocaleString()} stroops)`,
+      }
+    ),
   maxPlayers: z.number().int().positive().optional(),
   endsAt: z.string().datetime(),
 });
@@ -101,6 +115,20 @@ router.delete("/:id", authenticate, async (req, res) => {
   if (!deleted) throw createError("Brand not found", 404);
 
   res.status(204).send();
+});
+
+/**
+ * GET /brands/:id/dashboard
+ * Get aggregated challenge stats for a brand's dashboard.
+ * Uses the brand_challenge_stats view for efficient single-query aggregation.
+ */
+router.get("/:id/dashboard", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const stats = await getBrandChallengeStats(brand.id);
+  res.json({ stats });
 });
 
 /**
