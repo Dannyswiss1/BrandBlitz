@@ -26,7 +26,7 @@ router.use(requireAdmin);
 
 const SuspendBodySchema = z.object({
   reason: z.string().min(1, "Suspension reason is required").max(500),
-});
+}).strict();
 
 const ListUsersQuerySchema = z.object({
   status: z.enum(["active", "suspended"]).optional(),

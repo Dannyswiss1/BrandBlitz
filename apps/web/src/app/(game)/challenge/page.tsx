@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { formatUsdc } from "@/lib/utils";
 import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
+import { generateColoredBlurPlaceholder } from "@/lib/blur-placeholder";
 import type { Challenge } from "@/lib/api";
 
 const PAGE_SIZE = 20;
@@ -110,7 +111,7 @@ export default function ChallengeIndexPage() {
       ) : (
         <>
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {challenges.map((c) => (
+            {challenges.map((c, index) => (
               <Card key={c.id} className="transition-shadow hover:shadow-lg">
                 <CardHeader>
                   <div className="flex items-center justify-between">
@@ -122,6 +123,10 @@ export default function ChallengeIndexPage() {
                         height={48}
                         sizes="160px"
                         className="h-12 w-auto object-contain"
+                        loading={index < 3 ? "eager" : "lazy"}
+                        placeholder="blur"
+                        blurDataURL={generateColoredBlurPlaceholder(c.primary_color)}
+                        priority={index < 3}
                       />
                     ) : (
                       <div

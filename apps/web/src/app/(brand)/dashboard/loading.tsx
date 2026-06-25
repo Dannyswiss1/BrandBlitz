@@ -3,7 +3,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function DashboardLoading() {
   return (
-    <main className="max-w-5xl mx-auto px-6 py-12">
+    <main
+      className="max-w-5xl mx-auto px-6 py-12"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading brand dashboard"
+    >
       <div className="flex items-center justify-between mb-8">
         <div className="space-y-2">
           <Skeleton className="h-9 w-56" />
@@ -56,4 +61,3 @@ export default function DashboardLoading() {
     </main>
   );
 }
-

@@ -15,7 +15,7 @@ import { createPayout, updatePayoutStatus } from "../db/queries/payouts";
 import { incrementUserEarnings } from "../db/queries/users";
 import { rankWinners } from "./scoring";
 import { calculatePayoutShareStroops, stroopsToUsdc } from "../lib/usdc";
-import { payoutJobOptions, payoutQueue } from "../queues/payout.queue";
+import { enqueuePayoutJob } from "../queues/payout.queue";
 import { enqueueLeaderboardRefresh } from "../queues/leaderboard-refresh.queue";
 import { logger } from "../lib/logger";
 import { metrics } from "../lib/metrics";
@@ -23,15 +23,22 @@ import { config } from "../lib/config";
 import { stellarSequenceStore } from "../lib/redis";
 import { verifySessionHmac } from "../lib/integrity";
 import { queueReferralBonusForPayout } from "./referrals";
+import { query } from "../db";
+
+// Sentinel included in the PG trigger exception message (migration 018).
+export const FRAUD_BLOCK_SENTINEL = "FRAUD_BLOCKED_PAYOUT";
+
+export function isFraudBlockError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes(FRAUD_BLOCK_SENTINEL);
+}
 
 /**
  * Enqueue a payout job for a completed challenge.
  * The actual Stellar transactions are processed by the BullMQ worker.
  */
-export async function enqueuePayout(challengeId: string): Promise<void> {
-  await payoutQueue.add("process-payout", { challengeId }, payoutJobOptions);
+
   await enqueueLeaderboardRefresh(challengeId);
-  logger.info("Payout job enqueued", { challengeId });
+  logger.info("Payout job enqueued", { challengeId, requestId });
 }
 
 /**
@@ -42,15 +49,14 @@ export async function processPayout(challengeId: string): Promise<void> {
   const challenge = await getChallengeById(challengeId);
   if (!challenge) throw new Error(`Challenge ${challengeId} not found`);
   if (challenge.status !== "ended") {
-    logger.warn("Payout skipped - challenge not in ended state", {
-      challengeId,
-    });
+    logger.warn("Payout skipped - challenge not in ended state", { challengeId });
     return;
   }
 
-  const sessions = await getLeaderboard(challengeId, 1000); // all ranked sessions
+  // getLeaderboard already filters flagged=FALSE; the DB trigger (migration 018)
+  // is the immutable safety net if createPayout is called through any other path.
+  const sessions = await getLeaderboard(challengeId, 1000);
 
-  // Verify session integrity before any payout; abort if any record was tampered with
   for (const session of sessions) {
     if (
       !verifySessionHmac(
@@ -86,12 +92,10 @@ export async function processPayout(challengeId: string): Promise<void> {
 
   const eligibleWinners = ranked.filter((winner) => {
     if (winner.stellarAddress) return true;
-
     logger.error("Winner missing Stellar address on file; skipping payout", {
       challengeId,
       userId: winner.userId,
     });
-
     return false;
   });
 
@@ -116,14 +120,36 @@ export async function processPayout(challengeId: string): Promise<void> {
       continue;
     }
 
-    const amount = stroopsToUsdc(amountStroops);
-    const payout = await createPayout({
-      challengeId,
-      userId: winner.userId,
-      stellarAddress: winner.stellarAddress,
-      amountStroops,
-    });
+    let payout;
+    try {
+      payout = await createPayout({
+        challengeId,
+        userId: winner.userId,
+        stellarAddress: winner.stellarAddress,
+        amountStroops,
+      });
+    } catch (err) {
+      if (isFraudBlockError(err)) {
+        logger.warn("Payout blocked by DB fraud guard", {
+          challengeId,
+          userId: winner.userId,
+        });
+        await query(
+          `INSERT INTO audit_log (actor_id, action, entity, entity_key, after)
+           VALUES (NULL, $1, $2, $3, $4::jsonb)`,
+          [
+            "payout_blocked_fraud",
+            "payout",
+            `${challengeId}:${winner.userId}`,
+            JSON.stringify({ challengeId, userId: winner.userId }),
+          ],
+        );
+        continue;
+      }
+      throw err;
+    }
 
+    const amount = stroopsToUsdc(amountStroops);
     recipients.push({ address: winner.stellarAddress, amount });
     payoutRecords.push({
       id: payout.id,
@@ -144,70 +170,30 @@ export async function processPayout(challengeId: string): Promise<void> {
   }
 
   const network = config.STELLAR_NETWORK as NetworkName;
-  let results;
-  try {
-    results = await submitBatchPayout(
-      recipients,
-      config.HOT_WALLET_SECRET,
-      challengeId,
-      network,
-      {
-        onInvalidRecipient: (recipient, reason) => {
-          logger.error("Invalid payout recipient skipped", {
-            challengeId,
-            address: recipient.address,
-            amount: recipient.amount,
-            reason,
-          });
-        },
-      }
-    );
-  } catch (error) {
-    // Check if this is an insufficient fee error that could be recovered with a fee bump
-    if (isInsufficientFeeError(error)) {
-      logger.warn("Insufficient fee error detected; fee bump recovery may be needed", {
-        challengeId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Re-throw to allow BullMQ to retry, but mark in logs for manual fee bump handling
-      throw error;
-    }
 
-    if (isRetriableStellarError(error)) {
-      logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
-        challengeId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-
-    throw error;
-  }
-
-  // Use escrow contract for settlement if CONTRACT_ID is configured
+  // Prefer escrow contract settlement when CONTRACT_ID is configured.
   if (config.SOROBAN_CONTRACT_ID) {
     try {
       const escrow = new EscrowClient({
         contractId: config.SOROBAN_CONTRACT_ID,
         horizonUrl: config.STELLAR_HORIZON_URL,
         sorobanUrl: config.STELLAR_RPC_URL,
-        networkPassphrase: network === "testnet" ? "Test SDF Network ; September 2015" : "Public Global Stellar Network ; September 2015",
+        networkPassphrase:
+          network === "testnet"
+            ? "Test SDF Network ; September 2015"
+            : "Public Global Stellar Network ; September 2015",
       });
 
-      // Convert recipients to escrow format
       const escrowRecipients: EscrowRecipient[] = payoutRecords.map((record) => ({
         address: record.address,
         amountStroops: record.amountStroops,
       }));
 
-      // Settle via escrow contract
       const txHash = await escrow.settle(escrowRecipients, config.HOT_WALLET_SECRET);
 
-      // Mark all payouts as sent
       for (const record of payoutRecords) {
         await updatePayoutStatus(record.id, "sent", txHash);
         await incrementUserEarnings(record.userId, record.amount);
-
         await queueReferralBonusForPayout({
           referredUserId: record.userId,
           challengeId,
@@ -223,60 +209,72 @@ export async function processPayout(challengeId: string): Promise<void> {
         challengeId,
         error: (error as Error).message,
       });
-      // Fall through to direct payout
     }
   }
 
-  // Fallback: direct payout via hot-wallet
-  const results = await submitBatchPayout(
-    recipients,
-    config.HOT_WALLET_SECRET,
-    challengeId,
-    network,
-    { sequenceStore: stellarSequenceStore },
-  );
+  // Fallback: direct payout via hot-wallet.
+  let batchResults;
+  try {
+    batchResults = await submitBatchPayout(
+      recipients,
+      config.HOT_WALLET_SECRET,
+      challengeId,
+      network,
+      {
+        sequenceStore: stellarSequenceStore,
+        onInvalidRecipient: (recipient, reason) => {
+          logger.error("Invalid payout recipient skipped", {
+            challengeId,
+            address: recipient.address,
+            amount: recipient.amount,
+            reason,
+          });
+        },
+      },
+    );
+  } catch (error) {
+    if (isInsufficientFeeError(error)) {
+      logger.warn("Insufficient fee error detected; fee bump recovery may be needed", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    if (isRetriableStellarError(error)) {
+      logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
+  }
 
   const txHashes: string[] = [];
   let hasFailure = false;
 
-  for (const result of results) {
+  for (const result of batchResults) {
     const status = result.success ? "sent" : "failed";
-    if (!result.success) {
-      hasFailure = true;
-    }
+    if (!result.success) hasFailure = true;
 
     const errorMessage = !result.success
       ? (result.error ?? "Stellar broadcast failed with no error detail")
       : undefined;
 
     for (const recipient of result.recipients) {
-      const record = payoutRecords.find(
-        (candidate) => candidate.address === recipient.address,
-      );
-      if (record) {
-        await updatePayoutStatus(
-          record.id,
-          status,
-          result.txHash || undefined,
-          result.success ? undefined : result.error
-        );
-        if (result.success) {
-          await incrementUserEarnings(record.userId, record.amount);
-        }
+      const record = payoutRecords.find((c) => c.address === recipient.address);
+      if (!record) continue;
+
+      await updatePayoutStatus(record.id, status, result.txHash || undefined, errorMessage);
+      if (result.success) {
+        await incrementUserEarnings(record.userId, record.amount);
       }
     }
 
     if (result.success) {
       txHashes.push(result.txHash);
-
       for (const recipient of result.recipients) {
-        const record = payoutRecords.find(
-          (candidate) => candidate.address === recipient.address,
-        );
-        if (!record) {
-          continue;
-        }
-
+        const record = payoutRecords.find((c) => c.address === recipient.address);
+        if (!record) continue;
         await queueReferralBonusForPayout({
           referredUserId: record.userId,
           challengeId,
@@ -294,8 +292,7 @@ export async function processPayout(challengeId: string): Promise<void> {
 
   if (hasFailure) {
     logger.warn("Payout completed with failures", { challengeId, txHashes });
-    return;
+  } else {
+    logger.info("Payout complete via direct transfer", { challengeId, txHashes });
   }
-
-  logger.info("Payout complete via direct transfer", { challengeId, txHashes });
 }

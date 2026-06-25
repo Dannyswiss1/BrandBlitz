@@ -13,9 +13,10 @@ interface WarmupPhaseProps {
   challenge: Challenge;
   apiToken: string;
   onComplete: (challengeToken: string) => void;
+  deviceId?: string;
 }
 
-export function WarmupPhase({ challenge, apiToken, onComplete }: WarmupPhaseProps) {
+export function WarmupPhase({ challenge, apiToken, onComplete, deviceId }: WarmupPhaseProps) {
   const [unlocked, setUnlocked] = useState(false);
   const { submitting, wrap } = useSubmitting();
   // Stable reference so CountdownTimer's effect doesn't re-run when unlocked
@@ -28,13 +29,17 @@ export function WarmupPhase({ challenge, apiToken, onComplete }: WarmupPhaseProp
   useEffect(() => {
     // Signal to server that warmup has started to initialize timing & session
     const api = createApiClient(apiToken);
-    api.post(`/sessions/${challenge.id}/warmup-start`).catch(() => {
+    api.post(
+      `/sessions/${challenge.id}/warmup-start`,
+      {},
+      deviceId ? { headers: { "X-Device-Id": deviceId } } : undefined,
+    ).catch(() => {
       setStatusMessage("Failed to initialize warmup. Please refresh.");
     });
 
     const timer = setTimeout(() => setUnlocked(true), WARMUP_MIN_SECONDS * 1000);
     return () => clearTimeout(timer);
-  }, [apiToken, challenge.id]);
+  }, [apiToken, challenge.id, deviceId]);
 
   const handleStartChallenge = async () => {
     setStatusMessage(null);
@@ -81,7 +86,9 @@ export function WarmupPhase({ challenge, apiToken, onComplete }: WarmupPhaseProp
               alt={challenge.brand_name ?? "Brand logo"}
               width={120}
               height={120}
+              sizes="120px"
               className="object-contain rounded-xl"
+              priority
             />
           </div>
         )}

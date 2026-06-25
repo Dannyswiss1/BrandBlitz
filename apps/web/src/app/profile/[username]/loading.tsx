@@ -3,7 +3,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function ProfileLoading() {
   return (
-    <main className="max-w-2xl mx-auto px-6 py-12">
+    <main
+      className="max-w-2xl mx-auto px-6 py-12"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading profile"
+    >
       <div className="flex items-center gap-6 mb-10">
         <Skeleton className="h-20 w-20 rounded-full" />
         <div className="space-y-2">
@@ -23,6 +28,24 @@ export default function ProfileLoading() {
           </Card>
         ))}
       </div>
+
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>
+            <Skeleton className="h-6 w-24" />
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
+            {Array.from({ length: 8 }).map((_, idx) => (
+              <div key={idx} className="flex flex-col items-center gap-2 rounded-md border border-[var(--border)] p-3">
+                <Skeleton className="h-10 w-10 rounded-full" />
+                <Skeleton className="h-3 w-16" />
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -46,4 +69,3 @@ export default function ProfileLoading() {
     </main>
   );
 }
-

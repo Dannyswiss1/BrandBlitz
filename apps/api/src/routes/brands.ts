@@ -10,7 +10,9 @@ import {
   toBrandApi,
   updateBrand,
   deleteBrand,
+  getBrandChallengeStats,
 } from "../db/queries/brands";
+import { getBrandAnalytics } from "../db/queries/analytics";
 import {
   createChallenge,
   insertChallengeQuestions,
@@ -22,6 +24,7 @@ import { requireCurrentTosAccepted } from "../middleware/require-tos";
 import { createError } from "../middleware/error";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
+import { MIN_POOL_STROOPS } from "@brandblitz/stellar";
 
 const router = Router();
 
@@ -43,7 +46,19 @@ const BrandKitSchema = z.object({
 
 const ChallengeSchema = z.object({
   brandId: z.string().uuid(),
-  poolAmountUsdc: z.string().regex(/^\d+(\.\d{1,7})?$/),
+  poolAmountUsdc: z
+    .string()
+    .regex(/^\d+(\.\d{1,7})?$/)
+    .refine(
+      (val) => {
+        // Convert USDC amount to stroops and check minimum
+        const stroops = Math.round(parseFloat(val) * 10_000_000);
+        return stroops >= MIN_POOL_STROOPS;
+      },
+      {
+        message: `Pool amount must be at least 100 USDC (${MIN_POOL_STROOPS.toLocaleString()} stroops)`,
+      }
+    ),
   maxPlayers: z.number().int().positive().optional(),
   endsAt: z.string().datetime(),
 });
@@ -89,6 +104,34 @@ router.get("/:id", authenticate, async (req, res) => {
 });
 
 /**
+ * GET /brands/:id/analytics
+ * Returns aggregated analytics data for the brand's challenges.
+ */
+router.get("/:id/analytics", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const fromParam = req.query.from as string | undefined;
+  const toParam = req.query.to as string | undefined;
+
+  let from: Date | undefined;
+  let to: Date | undefined;
+
+  if (fromParam) {
+    from = new Date(fromParam);
+    if (isNaN(from.getTime())) throw createError("Invalid from date", 400);
+  }
+  if (toParam) {
+    to = new Date(toParam);
+    if (isNaN(to.getTime())) throw createError("Invalid to date", 400);
+  }
+
+  const analytics = await getBrandAnalytics(brand.id, from, to);
+  res.json({ analytics });
+});
+
+/**
  * DELETE /brands/:id
  * Soft-delete a brand kit (prevents new activity; existing challenges continue).
  */
@@ -101,6 +144,20 @@ router.delete("/:id", authenticate, async (req, res) => {
   if (!deleted) throw createError("Brand not found", 404);
 
   res.status(204).send();
+});
+
+/**
+ * GET /brands/:id/dashboard
+ * Get aggregated challenge stats for a brand's dashboard.
+ * Uses the brand_challenge_stats view for efficient single-query aggregation.
+ */
+router.get("/:id/dashboard", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const stats = await getBrandChallengeStats(brand.id);
+  res.json({ stats });
 });
 
 /**

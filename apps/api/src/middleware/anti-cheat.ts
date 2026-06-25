@@ -8,6 +8,7 @@ import { metrics } from "../lib/metrics";
 import { computeFingerprint } from "../lib/fingerprint";
 import { createError } from "./error";
 import { normalizeClientIp } from "./rate-limit";
+import { MAX_ROUND_SCORE, MAX_TOTAL_SCORE } from "../services/scoring";
 
 export const BOT_REACTION_THRESHOLD_MS = 80;
 // Fallback defaults — override at runtime via PATCH /admin/config/anti_cheat.thresholds
@@ -221,4 +222,52 @@ export async function validateDeviceFingerprint(
   }
 
   next();
+}
+
+/**
+ * Anti-cheat Layer 4 — score bounds validation.
+ * Flags sessions where a round score exceeds the per-round maximum.
+ * Called after server-side score computation, before persisting.
+ */
+export async function validateRoundScore(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> {
+  const { roundScore } = req.body as { roundScore?: number };
+
+  if (roundScore === undefined) {
+    next();
+    return;
+  }
+
+  if (!Number.isFinite(roundScore) || roundScore < 0 || roundScore > MAX_ROUND_SCORE) {
+    await recordFraudFlag(req, "round_score_out_of_range", {
+      roundScore,
+      maxAllowed: MAX_ROUND_SCORE,
+      severity: "critical",
+    }).catch(() => {});
+    throw createError(
+      `Round score ${roundScore} exceeds per-round maximum of ${MAX_ROUND_SCORE}`,
+      422,
+      "ROUND_SCORE_OUT_OF_RANGE"
+    );
+  }
+
+  next();
+}
+
+/**
+ * Validate that a total session score is within bounds.
+ * Returns a structured error if the value would exceed [0, MAX_TOTAL_SCORE].
+ * Intended for use after score computation and before persistence.
+ */
+export function assertValidTotalScore(totalScore: number): void {
+  if (!Number.isFinite(totalScore) || totalScore < 0 || totalScore > MAX_TOTAL_SCORE) {
+    throw createError(
+      `Total score ${totalScore} is outside valid range [0, ${MAX_TOTAL_SCORE}]`,
+      422,
+      "TOTAL_SCORE_OUT_OF_RANGE"
+    );
+  }
 }

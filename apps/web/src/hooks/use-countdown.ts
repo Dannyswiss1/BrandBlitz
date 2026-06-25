@@ -11,76 +11,63 @@ interface UseCountdownOptions {
    */
   deadlineAt?: number;
   onExpire?: () => void;
+  paused?: boolean;
 }
 
-export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCountdownOptions) {
+export function useCountdown({ durationSeconds, deadlineAt, onExpire, paused = false }: UseCountdownOptions) {
   const [timeLeftMs, setTimeLeftMs] = useState(durationSeconds * 1000);
   const onExpireRef = useRef(onExpire);
+  const pausedRef = useRef(paused);
   onExpireRef.current = onExpire;
+  pausedRef.current = paused;
 
   useEffect(() => {
     const totalMs = durationSeconds * 1000;
     setTimeLeftMs(totalMs);
-
-    // Derive start time from the server deadline when available so that the
-    // client clock is anchored to the authoritative deadline, not to when the
-    // component mounted.
-    const startTime = deadlineAt != null ? Date.now() - (totalMs - (deadlineAt - Date.now())) : Date.now();
-
-    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let remainingMs = deadlineAt != null ? Math.max(0, deadlineAt - Date.now()) : totalMs;
+    let lastTickAt = Date.now();
+    let expired = false;
     let hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
 
-    function getRemaining(): number {
+    function readRemaining(): number {
       if (deadlineAt != null) {
         return Math.max(0, deadlineAt - Date.now());
       }
-      const elapsed = Date.now() - startTime;
-      return Math.max(0, totalMs - elapsed);
+      return remainingMs;
     }
 
     function tick() {
-      const remaining = getRemaining();
+      const now = Date.now();
+
+      if (!pausedRef.current && !hidden && deadlineAt == null) {
+        remainingMs = Math.max(0, remainingMs - (now - lastTickAt));
+      }
+
+      lastTickAt = now;
+      const remaining = deadlineAt != null && !pausedRef.current && !hidden
+        ? Math.max(0, deadlineAt - now)
+        : readRemaining();
+
       setTimeLeftMs(remaining);
-      if (remaining === 0) {
-        if (intervalId != null) clearInterval(intervalId);
-        intervalId = null;
+      if (remaining === 0 && !expired) {
+        expired = true;
         onExpireRef.current?.();
       }
     }
 
-    function startInterval() {
-      if (intervalId != null) return;
-      intervalId = setInterval(tick, 100);
-    }
-
-    function stopInterval() {
-      if (intervalId != null) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    }
+    const intervalId = setInterval(tick, 100);
 
     // Pause the countdown when the tab is hidden to prevent background timing
-    // from advancing the displayed counter without the user seeing it.
-    // On restore, re-sync against the server deadline (or current elapsed time)
-    // so any real time that passed is accounted for correctly (#346).
+    // from advancing the displayed counter without the user seeing it. Deadline
+    // based timers still re-sync when visible and online again.
     function handleVisibilityChange() {
       if (document.visibilityState === "hidden") {
         hidden = true;
-        stopInterval();
       } else {
         hidden = false;
-        // Re-sync immediately on restore so the displayed time jumps to the
-        // correct value before the next interval tick.
+        lastTickAt = Date.now();
         tick();
-        if (getRemaining() > 0) {
-          startInterval();
-        }
       }
-    }
-
-    if (!hidden) {
-      startInterval();
     }
 
     if (typeof document !== "undefined") {
@@ -88,7 +75,7 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCount
     }
 
     return () => {
-      stopInterval();
+      clearInterval(intervalId);
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
       }

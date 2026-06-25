@@ -3,7 +3,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function LeaderboardLoading() {
   return (
-    <main className="max-w-3xl mx-auto px-6 py-12">
+    <main
+      className="max-w-3xl mx-auto px-6 py-12"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading leaderboard"
+    >
       <Skeleton className="h-9 w-64 mb-2" />
       <Skeleton className="h-5 w-80 mb-8" />
 
@@ -39,4 +44,3 @@ export default function LeaderboardLoading() {
     </main>
   );
 }
-
