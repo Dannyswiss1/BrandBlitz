@@ -150,7 +150,12 @@ export default function DashboardPage() {
                   <div className="flex gap-2">
                     <Link href={`/brand/${brand.id}`}>
                       <Button variant="outline" size="sm">
-                        View Analytics
+                        Overview
+                      </Button>
+                    </Link>
+                    <Link href={`/brand/${brand.id}/analytics`}>
+                      <Button variant="outline" size="sm">
+                        Analytics
                       </Button>
                     </Link>
                     <Link href={`/brand/${brand.id}/challenge/new`}>

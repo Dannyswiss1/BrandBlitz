@@ -11,6 +11,7 @@ import {
   updateBrand,
   deleteBrand,
 } from "../db/queries/brands";
+import { getBrandAnalytics } from "../db/queries/analytics";
 import {
   createChallenge,
   insertChallengeQuestions,
@@ -86,6 +87,34 @@ router.get("/:id", authenticate, async (req, res) => {
   if (!brand) throw createError("Brand not found", 404);
   if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
   res.json({ brand: toBrandApi(brand) });
+});
+
+/**
+ * GET /brands/:id/analytics
+ * Returns aggregated analytics data for the brand's challenges.
+ */
+router.get("/:id/analytics", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const fromParam = req.query.from as string | undefined;
+  const toParam = req.query.to as string | undefined;
+
+  let from: Date | undefined;
+  let to: Date | undefined;
+
+  if (fromParam) {
+    from = new Date(fromParam);
+    if (isNaN(from.getTime())) throw createError("Invalid from date", 400);
+  }
+  if (toParam) {
+    to = new Date(toParam);
+    if (isNaN(to.getTime())) throw createError("Invalid to date", 400);
+  }
+
+  const analytics = await getBrandAnalytics(brand.id, from, to);
+  res.json({ analytics });
 });
 
 /**
