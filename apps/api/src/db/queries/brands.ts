@@ -150,3 +150,21 @@ export async function deleteBrand(id: string, ownerUserId: string): Promise<bool
   );
   return (result.rowCount ?? 0) > 0;
 }
+
+export interface BrandChallengeStats {
+  brand_id: string;
+  challenge_id: string;
+  total_sessions: number;
+  completed_sessions: number;
+  avg_total_score: number | null;
+  unique_players: number;
+  payout_total_stroops: number;
+}
+
+export async function getBrandChallengeStats(brandId: string): Promise<BrandChallengeStats[]> {
+  const result = await query<BrandChallengeStats>(
+    `SELECT * FROM brand_challenge_stats WHERE brand_id = $1`,
+    [brandId]
+  );
+  return result.rows;
+}
