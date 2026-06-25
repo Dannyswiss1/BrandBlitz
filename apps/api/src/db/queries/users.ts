@@ -412,3 +412,10 @@ export async function listUsers(opts: {
 
   return { users: result.rows, total };
 }
+
+export async function updateLastLogin(userId: string): Promise<void> {
+  await query(
+    "UPDATE users SET last_login = NOW(), updated_at = NOW() WHERE id = $1",
+    [userId],
+  );
+}
