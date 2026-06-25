@@ -109,3 +109,42 @@ export async function findPayoutByTxHash(txHash: string): Promise<Payout | null>
   );
   return result.rows[0] ?? null;
 }
+
+/**
+ * Update payout status and fee bump tracking.
+ */
+export async function updatePayoutFeeBumpStatus(
+  payoutId: string,
+  status: "fee_bump_pending" | "fee_bump_failed" | "completed",
+  feeBumpMaxFee: number,
+  originalTxHash?: string
+): Promise<void> {
+  await query(
+    `UPDATE payouts
+     SET status = $2,
+         fee_bump_attempts = fee_bump_attempts + 1,
+         fee_bump_max_fee_stroops = $3,
+         original_tx_hash = COALESCE(original_tx_hash, $4),
+         updated_at = NOW()
+     WHERE id = $1`,
+    [payoutId, status, feeBumpMaxFee, originalTxHash]
+  );
+}
+
+/**
+ * Get payouts eligible for fee bump recovery.
+ */
+export async function getStuckPayouts(limit = 50): Promise<(Payout & { fee_bump_attempts: number })[]> {
+  const result = await query<Payout & { fee_bump_attempts: number }>(
+    `SELECT *,
+            (amount_stroops::numeric / 10000000)::numeric(20,7)::text AS amount_usdc,
+            fee_bump_attempts
+     FROM payouts
+     WHERE status IN ('failed', 'fee_bump_failed')
+       AND fee_bump_attempts < 3
+     ORDER BY created_at ASC
+     LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
+}

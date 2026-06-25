@@ -5,8 +5,10 @@ import {
   Operation,
   Memo,
   BASE_FEE,
+  FeeBumpTransaction,
+  TransactionEnvelope,
 } from "@stellar/stellar-sdk";
-import { getHorizonServer, getUsdcAsset, getNetworkPassphrase, type NetworkName } from "./client";
+import { getHorizonServer, getUsdcAsset, getNetworkPassphrase, withRetry, type NetworkName, type RetryOptions } from "./client";
 import { MAX_OPS_PER_TX, PAYOUT_BATCH_DELAY_MS } from "./constants";
 import {
   buildSequenceKeyPrefix,
@@ -117,7 +119,10 @@ export async function submitBatchPayout(
         const builtTx = tx.build();
         builtTx.sign(hotKeypair);
 
-        const response = await horizon.submitTransaction(builtTx);
+        const response = await withRetry(
+          () => horizon.submitTransaction(builtTx),
+          { maxAttempts: 5, baseDelayMs: 250, maxDelayMs: 30_000 }
+        );
 
         results.push({
           txHash: response.hash,
@@ -192,6 +197,18 @@ export function isRetriableStellarError(err: unknown): boolean {
   );
 }
 
+/**
+ * Check if an error indicates insufficient transaction fee (tx_insufficient_fee).
+ * These errors indicate the transaction could potentially be recovered with a fee bump.
+ */
+export function isInsufficientFeeError(err: unknown): boolean {
+  const txCode =
+    (err as any)?.response?.data?.extras?.result_codes?.transaction ??
+    (err as any)?.data?.extras?.result_codes?.transaction;
+
+  return txCode === "tx_insufficient_fee" || String((err as any)?.message ?? "").includes("tx_insufficient_fee");
+}
+
 function getInvalidRecipientReason(recipient: PayoutRecipient): string | null {
   if (!recipient.address) {
     return "missing address";
@@ -222,4 +239,78 @@ function chunkArray<T>(array: T[], size: number): T[][] {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Wrap a transaction in a fee bump envelope and submit it to Stellar.
+ * Used to recover stuck payout transactions when base fee spikes.
+ *
+ * @param originalTxHash - Hex hash of the stuck transaction
+ * @param newMaxFeeStroops - New max fee for the bump (typically 2x current base fee)
+ * @param hotWalletSecret - Hot wallet secret for signing the fee bump
+ * @param network - Stellar network
+ * @returns Fee bump transaction hash, or throws if submission fails
+ */
+export async function feeBumpTransaction(
+  originalTxHash: string,
+  newMaxFeeStroops: number,
+  hotWalletSecret: string,
+  network: NetworkName = "testnet"
+): Promise<{ txHash: string; feeBumpHash: string }> {
+  const horizon = getHorizonServer(network);
+  const hotKeypair = Keypair.fromSecret(hotWalletSecret);
+
+  // Retrieve the original transaction from Stellar
+  let originalTx: any;
+  try {
+    originalTx = await withRetry(
+      () => horizon.transactionDetail(originalTxHash),
+      { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 5_000 }
+    );
+  } catch (err) {
+    throw new Error(`Failed to retrieve original transaction ${originalTxHash}: ${(err as Error).message}`);
+  }
+
+  if (!originalTx) {
+    throw new Error(`Transaction ${originalTxHash} not found on Stellar`);
+  }
+
+  // Decode the original transaction envelope
+  let originalEnvelope: TransactionEnvelope;
+  try {
+    originalEnvelope = TransactionEnvelope.fromXDR(originalTx.envelope_xdr, "base64");
+  } catch (err) {
+    throw new Error(`Failed to decode transaction XDR: ${(err as Error).message}`);
+  }
+
+  // Create fee bump transaction wrapping the original
+  // Fee bump fee is total for the operation, not per operation
+  const innerTx = originalEnvelope.v1()?.tx() ?? originalEnvelope.v0()?.tx();
+  
+  if (!innerTx) {
+    throw new Error("Could not extract inner transaction from envelope");
+  }
+
+  const feeBumpTx = new FeeBumpTransaction({
+    fee: newMaxFeeStroops,
+    feeSource: hotKeypair.publicKey(),
+    innerTx,
+  });
+
+  // Create a new fee bump transaction envelope
+  const feeBumpEnvelope = new TransactionEnvelope(feeBumpTx, []);
+
+  // Sign the fee bump envelope
+  feeBumpEnvelope.sign(hotKeypair);
+
+  // Submit fee bump to Stellar
+  const result = await withRetry(
+    () => horizon.submitTransaction(feeBumpEnvelope),
+    { maxAttempts: 5, baseDelayMs: 250, maxDelayMs: 30_000 }
+  );
+
+  return {
+    txHash: originalTxHash,
+    feeBumpHash: result.hash,
+  };
 }

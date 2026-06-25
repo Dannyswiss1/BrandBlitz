@@ -23,6 +23,7 @@ export interface Challenge {
   secondary_color?: string | null;
   status: ChallengeStatus;
   deposit_tx_hash: string | null;
+  deposit_confirmations: number;
   payout_tx_hashes: string[] | null;
   max_players: number | null;
   starts_at: string;
@@ -200,4 +201,49 @@ export async function getChallengeQuestions(challengeId: string): Promise<Challe
     [challengeId]
   );
   return result.rows;
+}
+
+/**
+ * Increment deposit confirmations for a challenge.
+ * Returns the updated confirmation count.
+ * If confirmations reach required threshold, transitions to active status.
+ */
+export async function incrementDepositConfirmations(
+  challengeId: string,
+  requiredConfirmations: number
+): Promise<{ confirmations: number; activated: boolean }> {
+  const result = await query<{ deposit_confirmations: number; status: ChallengeStatus }>(
+    `UPDATE challenges
+     SET deposit_confirmations = LEAST(deposit_confirmations + 1, $2),
+         status = CASE 
+           WHEN (deposit_confirmations + 1) >= $2 AND status = 'pending_deposit'
+             THEN 'active'
+           ELSE status
+         END,
+         updated_at = NOW()
+     WHERE id = $1 AND status IN ('pending_deposit', 'active')
+     RETURNING deposit_confirmations, status`,
+    [challengeId, requiredConfirmations]
+  );
+
+  if (!result.rows[0]) {
+    throw new Error(`Challenge ${challengeId} not found or not in pending/active status`);
+  }
+
+  const { deposit_confirmations, status } = result.rows[0];
+  return {
+    confirmations: deposit_confirmations,
+    activated: status === "active" && deposit_confirmations >= requiredConfirmations,
+  };
+}
+
+/**
+ * Get current deposit confirmation count for a challenge.
+ */
+export async function getDepositConfirmations(challengeId: string): Promise<number | null> {
+  const result = await query<{ deposit_confirmations: number }>(
+    "SELECT deposit_confirmations FROM challenges WHERE id = $1 AND status IN ('pending_deposit', 'active')",
+    [challengeId]
+  );
+  return result.rows[0]?.deposit_confirmations ?? null;
 }
