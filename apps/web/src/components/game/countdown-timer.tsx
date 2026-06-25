@@ -17,7 +17,7 @@ interface CountdownTimerProps {
 }
 
 export function CountdownTimer({ durationSeconds, deadlineAt, onExpire, className }: CountdownTimerProps) {
-  const { timeLeftMs } = useCountdown({ durationSeconds, deadlineAt, onExpire });
+  const { timeLeftMs, isPaused } = useCountdown({ durationSeconds, deadlineAt, onExpire });
 
   const seconds = Math.ceil(timeLeftMs / 1000);
   const totalMs = Math.max(durationSeconds, 1) * 1000;
@@ -26,14 +26,21 @@ export function CountdownTimer({ durationSeconds, deadlineAt, onExpire, classNam
 
   return (
     <div className={cn("flex flex-col items-center gap-2", className)}>
-      <span
-        className={cn(
-          "text-4xl font-bold tabular-nums transition-colors",
-          isLow ? "text-red-500 animate-pulse" : "text-[var(--foreground)]"
-        )}
-      >
-        {seconds}
-      </span>
+      {isPaused ? (
+        <span className="text-lg font-semibold text-amber-600 flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+          Paused
+        </span>
+      ) : (
+        <span
+          className={cn(
+            "text-4xl font-bold tabular-nums transition-colors",
+            isLow ? "text-red-500 animate-pulse" : "text-[var(--foreground)]"
+          )}
+        >
+          {seconds}
+        </span>
+      )}
       <Progress
         value={progress}
         className={cn("w-full h-3", isLow && "[&>div]:bg-red-500")}

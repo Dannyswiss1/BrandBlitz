@@ -18,22 +18,15 @@ interface WarmupPhaseProps {
 export function WarmupPhase({ challenge, apiToken, onComplete }: WarmupPhaseProps) {
   const [unlocked, setUnlocked] = useState(false);
   const { submitting, wrap } = useSubmitting();
-  // Stable reference so CountdownTimer's effect doesn't re-run when unlocked
-  // flips true and this component re-renders with a new inline arrow function.
   const handleTimerExpire = useCallback(() => setUnlocked(true), []);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [showRetry, setShowRetry] = useState(false);
 
-  // Server enforces WARMUP_MIN_SECONDS; client enables button after same duration
   useEffect(() => {
-    // Signal to server that warmup has started to initialize timing & session
     const api = createApiClient(apiToken);
     api.post(`/sessions/${challenge.id}/warmup-start`).catch(() => {
       setStatusMessage("Failed to initialize warmup. Please refresh.");
     });
-
-    const timer = setTimeout(() => setUnlocked(true), WARMUP_MIN_SECONDS * 1000);
-    return () => clearTimeout(timer);
   }, [apiToken, challenge.id]);
 
   const handleStartChallenge = async () => {

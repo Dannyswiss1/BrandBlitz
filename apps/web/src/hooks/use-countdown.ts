@@ -15,20 +15,19 @@ interface UseCountdownOptions {
 
 export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCountdownOptions) {
   const [timeLeftMs, setTimeLeftMs] = useState(durationSeconds * 1000);
+  const [isPaused, setIsPaused] = useState(false);
   const onExpireRef = useRef(onExpire);
   onExpireRef.current = onExpire;
 
   useEffect(() => {
     const totalMs = durationSeconds * 1000;
     setTimeLeftMs(totalMs);
+    setIsPaused(false);
 
-    // Derive start time from the server deadline when available so that the
-    // client clock is anchored to the authoritative deadline, not to when the
-    // component mounted.
     const startTime = deadlineAt != null ? Date.now() - (totalMs - (deadlineAt - Date.now())) : Date.now();
 
     let intervalId: ReturnType<typeof setInterval> | null = null;
-    let hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    let paused = false;
 
     function getRemaining(): number {
       if (deadlineAt != null) {
@@ -39,6 +38,7 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCount
     }
 
     function tick() {
+      if (paused) return;
       const remaining = getRemaining();
       setTimeLeftMs(remaining);
       if (remaining === 0) {
@@ -60,40 +60,58 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCount
       }
     }
 
-    // Pause the countdown when the tab is hidden to prevent background timing
-    // from advancing the displayed counter without the user seeing it.
-    // On restore, re-sync against the server deadline (or current elapsed time)
-    // so any real time that passed is accounted for correctly (#346).
-    function handleVisibilityChange() {
-      if (document.visibilityState === "hidden") {
-        hidden = true;
-        stopInterval();
-      } else {
-        hidden = false;
-        // Re-sync immediately on restore so the displayed time jumps to the
-        // correct value before the next interval tick.
-        tick();
-        if (getRemaining() > 0) {
-          startInterval();
-        }
+    function pause() {
+      if (paused) return;
+      paused = true;
+      setIsPaused(true);
+      stopInterval();
+    }
+
+    function resume() {
+      if (!paused) return;
+      paused = false;
+      setIsPaused(false);
+      tick();
+      if (getRemaining() > 0) {
+        startInterval();
       }
     }
 
-    if (!hidden) {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        pause();
+      } else {
+        resume();
+      }
+    }
+
+    function handleBlur() {
+      pause();
+    }
+
+    function handleFocus() {
+      resume();
+    }
+
+    if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
       startInterval();
     }
 
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", handleVisibilityChange);
+      window.addEventListener("blur", handleBlur);
+      window.addEventListener("focus", handleFocus);
     }
 
     return () => {
       stopInterval();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
+        window.removeEventListener("blur", handleBlur);
+        window.removeEventListener("focus", handleFocus);
       }
     };
   }, [durationSeconds, deadlineAt]);
 
-  return { timeLeftMs };
+  return { timeLeftMs, isPaused };
 }
