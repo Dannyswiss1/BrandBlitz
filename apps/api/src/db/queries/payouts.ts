@@ -102,6 +102,27 @@ export async function getPendingPayouts(
   return result.rows;
 }
 
+/**
+ * Batch fetch payouts by IDs with user data via JOIN.
+ * Replaces N+1 SELECT pattern with single batch query.
+ */
+export async function getPayoutsByIds(payoutIds: string[]): Promise<Payout[]> {
+  if (payoutIds.length === 0) return [];
+  
+  const result = await query<Payout>(
+    `SELECT p.*,
+            (p.amount_stroops::numeric / 10000000)::numeric(20,7)::text AS amount_usdc,
+            u.stellar_address,
+            u.id AS user_id
+     FROM payouts p
+     JOIN users u ON p.user_id = u.id
+     WHERE p.id = ANY($1::uuid[])
+     ORDER BY array_position($1::uuid[], p.id)`,
+    [payoutIds]
+  );
+  return result.rows;
+}
+
 export async function findPayoutByTxHash(txHash: string): Promise<Payout | null> {
   const result = await query<Payout>(
     "SELECT *, (amount_stroops::numeric / 10000000)::numeric(20,7)::text AS amount_usdc FROM payouts WHERE tx_hash = $1 LIMIT 1",

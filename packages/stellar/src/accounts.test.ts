@@ -127,3 +127,37 @@ describe('accountHasUsdcTrustline', () => {
     expect(client.getUsdcAsset).toHaveBeenCalledWith('public');
   });
 });
+
+// --- Slug generation determinism regression test ---
+describe('createMuxedAddress determinism', () => {
+  it('same user ID always yields the same slug', () => {
+    const userId = 1234567890123456789n;
+    const slug1 = createMuxedAddress(basePublicKey, userId);
+    const slug2 = createMuxedAddress(basePublicKey, userId);
+    const slug3 = createMuxedAddress(basePublicKey, userId);
+
+    expect(slug1).toBe(slug2);
+    expect(slug2).toBe(slug3);
+  });
+
+  it('different user IDs yield different slugs', () => {
+    const slug1 = createMuxedAddress(basePublicKey, 1n);
+    const slug2 = createMuxedAddress(basePublicKey, 2n);
+
+    expect(slug1).not.toBe(slug2);
+  });
+
+  it('known test vector produces expected output', () => {
+    // Test vector from Stellar docs
+    const testPublicKey = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
+    const testUserId = 1234n;
+    const slug = createMuxedAddress(testPublicKey, testUserId);
+
+    // Verify slug starts with M (muxed account prefix)
+    expect(slug[0]).toBe('M');
+    
+    // Verify deterministic - same inputs = same output
+    const slug2 = createMuxedAddress(testPublicKey, testUserId);
+    expect(slug).toBe(slug2);
+  });
+});

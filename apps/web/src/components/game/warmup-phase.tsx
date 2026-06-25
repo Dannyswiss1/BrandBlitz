@@ -81,7 +81,9 @@ export function WarmupPhase({ challenge, apiToken, onComplete }: WarmupPhaseProp
               alt={challenge.brand_name ?? "Brand logo"}
               width={120}
               height={120}
+              sizes="120px"
               className="object-contain rounded-xl"
+              priority
             />
           </div>
         )}

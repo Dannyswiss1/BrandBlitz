@@ -15,6 +15,7 @@ export const leagueQueue = new Queue("league", {
 
 export async function ensureLeagueRepeatableJobs(): Promise<void> {
   // Sunday 23:59 UTC — finalize week (rank + promoted/demoted flags)
+  // jobId ensures idempotent repeatable job registration
   await leagueQueue.add(
     "finalize-week",
     {},
