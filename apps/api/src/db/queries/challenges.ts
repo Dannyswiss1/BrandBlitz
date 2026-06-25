@@ -110,6 +110,29 @@ export async function getChallengeByIdAny(id: string): Promise<Challenge & { arc
   return result.rows[0] ?? null;
 }
 
+export async function getActiveChallengesCursor(
+  cursor?: string,
+  limit = 20
+): Promise<{ challenges: Challenge[]; nextCursor: string | null }> {
+  const result = await query<Challenge>(
+    `SELECT c.*, (c.pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc,
+            b.name as brand_name, b.logo_url, b.primary_color, b.secondary_color
+     FROM challenges c
+     JOIN brands b ON c.brand_id = b.id
+     WHERE c.status = 'active' AND c.deleted_at IS NULL AND b.deleted_at IS NULL
+       AND ($1::uuid IS NULL OR c.id > $1::uuid)
+     ORDER BY c.id
+     LIMIT $2`,
+    [cursor ?? null, limit + 1]
+  );
+
+  const hasMore = result.rows.length > limit;
+  const challenges = result.rows.slice(0, limit);
+  const nextCursor = challenges.length > 0 ? challenges[challenges.length - 1].id : null;
+
+  return { challenges, nextCursor: hasMore ? nextCursor : null };
+}
+
 export async function getActiveChallenges(limit = 20, offset = 0): Promise<Challenge[]> {
   const result = await query<Challenge>(
     `SELECT c.*, (c.pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc,
