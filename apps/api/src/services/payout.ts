@@ -1,6 +1,7 @@
 import {
   isRetriableStellarError,
   submitBatchPayout,
+  isInsufficientFeeError,
   type PayoutRecipient,
 } from "@brandblitz/stellar";
 import type { NetworkName } from "@brandblitz/stellar";
@@ -162,6 +163,16 @@ export async function processPayout(challengeId: string): Promise<void> {
       }
     );
   } catch (error) {
+    // Check if this is an insufficient fee error that could be recovered with a fee bump
+    if (isInsufficientFeeError(error)) {
+      logger.warn("Insufficient fee error detected; fee bump recovery may be needed", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Re-throw to allow BullMQ to retry, but mark in logs for manual fee bump handling
+      throw error;
+    }
+
     if (isRetriableStellarError(error)) {
       logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
         challengeId,
@@ -249,8 +260,6 @@ export async function processPayout(challengeId: string): Promise<void> {
           result.txHash || undefined,
           result.success ? undefined : result.error
         );
-          errorMessage,
-        );
         if (result.success) {
           await incrementUserEarnings(record.userId, record.amount);
         }
@@ -288,6 +297,5 @@ export async function processPayout(challengeId: string): Promise<void> {
     return;
   }
 
-  logger.info("Payout complete", { challengeId, txHashes });
   logger.info("Payout complete via direct transfer", { challengeId, txHashes });
 }

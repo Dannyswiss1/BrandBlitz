@@ -27,7 +27,20 @@ const KnownConfigSchema = z.discriminatedUnion("key", [
   z.object({
     key: z.literal("payout"),
     value: z.record(z.unknown()), // Fallback schema for payout
-  })
+  }),
+  z.object({
+    key: z.literal("deposit_required_confirmations"),
+    value: z.object({
+      confirmations: z.number().int().min(1).max(100),
+    }),
+  }),
+  z.object({
+    key: z.literal("escrow_multisig_threshold"),
+    value: z.object({
+      required: z.number().int().min(1),
+      total: z.number().int().min(1),
+    }),
+  }),
 ]);
 
 const PatchConfigSchema = z.object({

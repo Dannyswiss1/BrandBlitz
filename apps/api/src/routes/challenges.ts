@@ -12,6 +12,7 @@ import { optionalAuth, authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
 import { withCoalescing } from "../lib/cache";
 import { config } from "../lib/config";
+import { query } from "../db/index";
 
 const router = Router();
 
@@ -20,6 +21,16 @@ const PaginationSchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
   brandId: z.string().uuid().optional(),
 });
+
+/**
+ * Get required deposit confirmations from app_config.
+ */
+async function getRequiredConfirmations(): Promise<number> {
+  const result = await query<{ value: { confirmations: number } }>(
+    "SELECT value FROM app_config WHERE key = 'deposit_required_confirmations'"
+  );
+  return result.rows[0]?.value?.confirmations ?? 5;
+}
 
 /**
  * GET /challenges
@@ -55,6 +66,7 @@ router.get("/", optionalAuth, async (req, res) => {
 /**
  * GET /challenges/:id
  * Get challenge details. Questions (without correct answers) included.
+ * For pending_deposit challenges, includes confirmation count and requirement.
  */
 router.get("/:id", optionalAuth, async (req, res) => {
   const challenge = await getChallengeByIdAny(req.params.id);
@@ -64,7 +76,23 @@ router.get("/:id", optionalAuth, async (req, res) => {
   const questions = await getChallengeQuestions(challenge.id);
   const safeQuestions = questions.map(({ correct_answer, correct_option, ...q }) => q);
 
-  res.json({ challenge, questions: safeQuestions });
+  // For pending_deposit challenges, include confirmation info
+  let confirmationInfo = null;
+  if (challenge.status === "pending_deposit") {
+    const requiredConfirmations = await getRequiredConfirmations();
+    confirmationInfo = {
+      depositConfirmations: challenge.deposit_confirmations,
+      requiredConfirmations,
+    };
+  }
+
+  res.json({
+    challenge: {
+      ...challenge,
+      ...(confirmationInfo && confirmationInfo),
+    },
+    questions: safeQuestions,
+  });
 });
 
 /**
