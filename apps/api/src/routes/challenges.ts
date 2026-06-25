@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   getActiveChallenges,
+  getActiveChallengesCursor,
   getChallengeByIdAny,
   getChallengesByBrandId,
   getChallengeQuestions,
@@ -16,9 +17,9 @@ import { query } from "../db/index";
 
 const router = Router();
 
-const PaginationSchema = z.object({
+const CursorPaginationSchema = z.object({
+  cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  offset: z.coerce.number().int().min(0).default(0),
   brandId: z.string().uuid().optional(),
 });
 
@@ -37,12 +38,12 @@ async function getRequiredConfirmations(): Promise<number> {
  * List active challenges (public).
  */
 router.get("/", optionalAuth, async (req, res) => {
-  const parsed = PaginationSchema.safeParse(req.query);
+  const parsed = CursorPaginationSchema.safeParse(req.query);
   if (!parsed.success) {
     throw createError("Invalid query parameters", 400, "INVALID_QUERY");
   }
 
-  const { brandId, limit, offset } = parsed.data;
+  const { brandId, limit, cursor } = parsed.data;
 
   if (brandId) {
     const brand = await getBrandById(brandId);
@@ -50,17 +51,22 @@ router.get("/", optionalAuth, async (req, res) => {
       throw createError("Forbidden", 403);
     }
 
-    const challenges = await getChallengesByBrandId(brandId, limit, offset);
-    res.json({ challenges });
+    const challenges = await getChallengesByBrandId(brandId, limit, 0);
+    res.json({ data: challenges, nextCursor: null });
     return;
   }
 
-  const challenges = await withCoalescing(
-    `challenges:active:${limit}:${offset}`,
+  const cacheKey = cursor
+    ? `challenges:cursor:${cursor}:${limit}`
+    : `challenges:cursor:first:${limit}`;
+
+  const result = await withCoalescing(
+    cacheKey,
     60,
-    () => getActiveChallenges(limit, offset)
+    () => getActiveChallengesCursor(cursor, limit)
   );
-  res.json({ challenges });
+
+  res.json({ data: result.challenges, nextCursor: result.nextCursor });
 });
 
 /**
@@ -103,7 +109,10 @@ router.get("/:id/leaderboard", async (req, res) => {
   const challenge = await getChallengeByIdAny(req.params.id);
   if (!challenge) throw createError("Challenge not found", 404);
 
-  const { limit, offset } = PaginationSchema.parse(req.query);
+  const { limit, offset } = z.object({
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    offset: z.coerce.number().int().min(0).default(0),
+  }).parse(req.query);
   const sessions = challenge.archived
     ? await getArchivedLeaderboard(challenge.id, limit, offset)
     : await getLeaderboard(challenge.id, limit, offset);

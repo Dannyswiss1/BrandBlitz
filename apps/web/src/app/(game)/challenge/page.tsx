@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { formatUsdc } from "@/lib/utils";
+import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import { generateColoredBlurPlaceholder } from "@/lib/blur-placeholder";
 import type { Challenge } from "@/lib/api";
 
@@ -15,35 +16,60 @@ const PAGE_SIZE = 20;
 
 export default function ChallengeIndexPage() {
   const [challenges, setChallenges] = useState<Challenge[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [initialized, setInitialized] = useState(false);
 
-  const fetchPage = useCallback(async (pageOffset: number, replace: boolean) => {
+  const fetchPage = useCallback(async (cursor?: string) => {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+    if (cursor) params.set("cursor", cursor);
+
+    const res = await api.get(`/challenges?${params.toString()}`);
+    const page: Challenge[] = res.data.data;
+    const nc: string | null = res.data.nextCursor;
+    return { page, nextCursor: nc };
+  }, []);
+
+  const loadInitial = useCallback(async () => {
     try {
-      const res = await api.get(`/challenges?limit=${PAGE_SIZE}&offset=${pageOffset}`);
-      const page: Challenge[] = res.data.challenges;
-      setChallenges((prev) => replace ? page : [...prev, ...page]);
-      setHasMore(page.length === PAGE_SIZE);
-      setOffset(pageOffset + page.length);
+      const { page, nextCursor: nc } = await fetchPage();
+      setChallenges(page);
+      setNextCursor(nc);
       setFailed(false);
     } catch {
       setFailed(true);
+    } finally {
+      setLoading(false);
+      setInitialized(true);
     }
-  }, []);
-
-  // Initial load — render only the first 20 cards into the DOM (#362).
-  useEffect(() => {
-    void fetchPage(0, true).finally(() => setLoading(false));
   }, [fetchPage]);
 
-  const handleLoadMore = async () => {
+  useEffect(() => {
+    void loadInitial();
+  }, [loadInitial]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !nextCursor) return;
     setLoadingMore(true);
-    await fetchPage(offset, false);
-    setLoadingMore(false);
-  };
+    try {
+      const { page, nextCursor: nc } = await fetchPage(nextCursor);
+      setChallenges((prev) => [...prev, ...page]);
+      setNextCursor(nc);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, nextCursor, fetchPage]);
+
+  const sentinelRef = useInfiniteScroll({
+    hasNextPage: !!nextCursor,
+    isLoading: loadingMore,
+    onLoadMore: loadMore,
+  });
 
   if (loading) {
     return (
@@ -80,7 +106,7 @@ export default function ChallengeIndexPage() {
         <p className="text-[var(--muted-foreground)]">
           Couldn&apos;t load active challenges right now. Refresh and try again.
         </p>
-      ) : challenges.length === 0 ? (
+      ) : challenges.length === 0 && initialized ? (
         <p className="text-[var(--muted-foreground)]">No active challenges yet. Check back soon!</p>
       ) : (
         <>
@@ -127,16 +153,19 @@ export default function ChallengeIndexPage() {
             ))}
           </div>
 
-          {hasMore && (
-            <div className="mt-10 flex justify-center">
-              <Button
-                variant="outline"
-                onClick={handleLoadMore}
-                disabled={loadingMore}
-              >
-                {loadingMore ? "Loading…" : "Load more challenges"}
-              </Button>
+          {/* Sentinel element for IntersectionObserver */}
+          <div ref={sentinelRef} className="h-4" />
+
+          {loadingMore && (
+            <div className="mt-6 flex justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--border)] border-t-[var(--primary)]" />
             </div>
+          )}
+
+          {!nextCursor && challenges.length > 0 && (
+            <p className="mt-8 text-center text-sm text-[var(--muted-foreground)]">
+              You&apos;ve seen everything
+            </p>
           )}
 
           {failed && challenges.length > 0 && (

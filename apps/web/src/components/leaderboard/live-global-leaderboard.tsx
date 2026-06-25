@@ -8,20 +8,23 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
 import { formatScore, formatUsdc } from "@/lib/format";
+import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import type { LeaderboardEntry } from "@/lib/api";
 
 const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 const PAGE_SIZE = 50;
 const STORAGE_KEY = "brandblitz:leaderboard:global";
 
-async function fetchLeaderboardPage(offset: number): Promise<{
+async function fetchLeaderboardPage(cursor?: string): Promise<{
   entries: LeaderboardEntry[];
-  hasMore: boolean;
+  nextCursor: string | null;
 }> {
-  const res = await api.get(`/leaderboard/global?limit=${PAGE_SIZE}&offset=${offset}`);
-  const entries: LeaderboardEntry[] = res.data.leaderboard;
-  const hasMore = Boolean(res.data.pagination?.hasMore ?? entries.length === PAGE_SIZE);
-  return { entries, hasMore };
+  const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+  if (cursor) params.set("cursor", cursor);
+  const res = await api.get(`/leaderboard/global?${params.toString()}`);
+  const entries: LeaderboardEntry[] = res.data.data;
+  const nextCursor: string | null = res.data.nextCursor ?? null;
+  return { entries, nextCursor };
 }
 
 function loadSavedState(): { scrollY: number; loadedCount: number } | null {
@@ -56,7 +59,7 @@ export function LiveGlobalLeaderboard({
   initialHasMore?: boolean;
 }) {
   const [entries, setEntries] = useState(initial);
-  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [nextCursor, setNextCursor] = useState<string | null>(initialHasMore ? "first" : null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDisconnected, setIsDisconnected] = useState(false);
@@ -83,20 +86,20 @@ export function LiveGlobalLeaderboard({
     const restore = async () => {
       setIsRestoring(true);
       let currentEntries = initial.slice();
-      let nextOffset = currentEntries.length;
+      let cursor: string | undefined = currentEntries.length > 0 ? undefined : "first";
 
       while (currentEntries.length < saved.loadedCount) {
-        const page = await fetchLeaderboardPage(nextOffset);
+        const page = await fetchLeaderboardPage(cursor === "first" ? undefined : cursor);
         if (cancelled || page.entries.length === 0) {
           break;
         }
 
         currentEntries = currentEntries.concat(page.entries);
-        nextOffset = currentEntries.length;
+        cursor = page.nextCursor ?? undefined;
         setEntries(currentEntries);
-        setHasMore(page.hasMore);
+        setNextCursor(page.nextCursor);
 
-        if (!page.hasMore) {
+        if (!page.nextCursor) {
           break;
         }
       }
@@ -156,24 +159,26 @@ export function LiveGlobalLeaderboard({
   }, [rows]);
 
   const loadMore = async () => {
-    if (isLoadingMore || !hasMore) {
-      return;
-    }
-
+    if (isLoadingMore || !nextCursor) return;
     setIsLoadingMore(true);
     try {
-      const page = await fetchLeaderboardPage(entries.length);
+      const page = await fetchLeaderboardPage(nextCursor === "first" ? undefined : nextCursor);
       if (page.entries.length === 0) {
-        setHasMore(false);
+        setNextCursor(null);
         return;
       }
-
       setEntries((current) => current.concat(page.entries));
-      setHasMore(page.hasMore);
+      setNextCursor(page.nextCursor);
     } finally {
       setIsLoadingMore(false);
     }
   };
+
+  const sentinelRef = useInfiniteScroll({
+    hasNextPage: !!nextCursor,
+    isLoading: isLoadingMore,
+    onLoadMore: loadMore,
+  });
 
   if (isDisconnected) {
     return (
@@ -269,14 +274,19 @@ export function LiveGlobalLeaderboard({
         <p className="text-sm text-[var(--muted-foreground)]">
           Showing {rows.length} players
         </p>
-        {hasMore ? (
-          <Button variant="outline" onClick={() => void loadMore()} disabled={isLoadingMore}>
-            {isLoadingMore ? "Loading..." : "Load more"}
-          </Button>
-        ) : (
-          <p className="text-sm text-[var(--muted-foreground)]">You&apos;re at the end.</p>
-        )}
+        {!nextCursor && rows.length > 0 ? (
+          <p className="text-sm text-[var(--muted-foreground)]">You&apos;ve seen everything</p>
+        ) : null}
       </div>
+
+      {isLoadingMore && (
+        <div className="flex justify-center py-4">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--border)] border-t-[var(--primary)]" />
+        </div>
+      )}
+
+      {/* Sentinel element for IntersectionObserver */}
+      <div ref={sentinelRef} className="h-4" />
     </div>
   );
 }
