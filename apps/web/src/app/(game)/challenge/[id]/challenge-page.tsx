@@ -17,6 +17,7 @@ import {
   type SessionRecoveryDetails,
 } from "@/components/game/session-recovery-modal";
 import { scoresForResume, shouldShowRecoveryModal } from "@/components/game/session-recovery";
+import { BrandKitPreview } from "@/components/brand/brand-kit-preview";
 
 const WarmupPhase = dynamic(() => import("@/components/game/warmup-phase").then((m) => m.WarmupPhase), {
   loading: () => <div className="min-h-screen flex items-center justify-center">Loading warmup...</div>,
@@ -30,7 +31,7 @@ const ResultScreen = dynamic(() => import("@/components/game/result-screen").the
   loading: () => <div className="min-h-screen flex items-center justify-center">Preparing results...</div>,
 });
 
-type GamePhase = "loading" | "warmup" | "challenge" | "result";
+type GamePhase = "loading" | "preview" | "warmup" | "challenge" | "result";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -160,13 +161,27 @@ export function ChallengePage({ params }: Props) {
         }
       }
 
-      if (!cancelled) setPhase("warmup");
+      try {
+        const r = await api.post(`/sessions/${challengeId}/warmup-start`, { deviceId: visitorId });
+        if (cancelled) return;
+        setPhase("preview");
+      } catch {
+        if (!cancelled) setLoadError("Couldn't start the game session. Please try again.");
+      }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [apiToken, challengeId, router, status]);
+  }, [apiToken, challengeId, router, status, visitorId]);
+
+  const handlePreviewStart = React.useCallback(() => {
+    setPhase("warmup");
+  }, []);
+
+  const handlePreviewSkip = React.useCallback(() => {
+    setPhase("warmup");
+  }, []);
 
   const handleWarmupComplete = async (challengeToken: string) => {
     if (!apiToken) return;
@@ -337,6 +352,20 @@ export function ChallengePage({ params }: Props) {
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-pulse text-[var(--muted-foreground)]">Loading challenge...</div>
       </div>
+    );
+  }
+
+  if (phase === "preview" && challenge) {
+    return (
+      <BrandKitPreview
+        logoUrl={challenge.logo_url ?? null}
+        primaryColor={challenge.primary_color ?? null}
+        secondaryColor={challenge.secondary_color ?? null}
+        tagline={challenge.tagline ?? null}
+        brandName={challenge.brand_name ?? "Brand"}
+        onStart={handlePreviewStart}
+        onSkip={handlePreviewSkip}
+      />
     );
   }
 
