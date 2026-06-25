@@ -155,4 +155,33 @@ describe('CountdownTimer', () => {
     act(() => { vi.advanceTimersByTime(4000); });
     expect(onExpire).toHaveBeenCalledTimes(1);
   });
+
+  it('pauses on window blur and shows Paused indicator', () => {
+    render(<CountdownTimer durationSeconds={10} />);
+    expect(screen.getByText('10')).not.toBeNull();
+
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(screen.getByText('8')).not.toBeNull();
+
+    // Simulate window blur
+    act(() => { window.dispatchEvent(new Event('blur')); });
+
+    // Should show Paused indicator
+    expect(screen.getByText('Paused')).not.toBeNull();
+
+    // Timer should not advance while blurred
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(screen.getByText('Paused')).not.toBeNull();
+
+    // Resume on focus
+    act(() => { window.dispatchEvent(new Event('focus')); });
+
+    // Paused indicator should disappear
+    expect(screen.queryByText('Paused')).toBeNull();
+
+    // Timer resumes from correct remaining time
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.getByText('7')).not.toBeNull();
+  });
+
 });

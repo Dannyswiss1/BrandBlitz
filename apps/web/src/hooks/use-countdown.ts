@@ -16,6 +16,7 @@ interface UseCountdownOptions {
 
 export function useCountdown({ durationSeconds, deadlineAt, onExpire, paused = false }: UseCountdownOptions) {
   const [timeLeftMs, setTimeLeftMs] = useState(durationSeconds * 1000);
+  const [isPaused, setIsPaused] = useState(paused);
   const onExpireRef = useRef(onExpire);
   const pausedRef = useRef(paused);
   onExpireRef.current = onExpire;
@@ -24,10 +25,13 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire, paused = f
   useEffect(() => {
     const totalMs = durationSeconds * 1000;
     setTimeLeftMs(totalMs);
+    setIsPaused(paused || (typeof document !== "undefined" && document.visibilityState === "hidden"));
+
     let remainingMs = deadlineAt != null ? Math.max(0, deadlineAt - Date.now()) : totalMs;
     let lastTickAt = Date.now();
     let expired = false;
     let hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    let blurred = false;
 
     function readRemaining(): number {
       if (deadlineAt != null) {
@@ -39,12 +43,12 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire, paused = f
     function tick() {
       const now = Date.now();
 
-      if (!pausedRef.current && !hidden && deadlineAt == null) {
+      if (!pausedRef.current && !hidden && !blurred && deadlineAt == null) {
         remainingMs = Math.max(0, remainingMs - (now - lastTickAt));
       }
 
       lastTickAt = now;
-      const remaining = deadlineAt != null && !pausedRef.current && !hidden
+      const remaining = deadlineAt != null && !pausedRef.current && !hidden && !blurred
         ? Math.max(0, deadlineAt - now)
         : readRemaining();
 
@@ -53,6 +57,10 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire, paused = f
         expired = true;
         onExpireRef.current?.();
       }
+
+      // Sync isPaused state for UI display
+      const effectivelyPaused = pausedRef.current || hidden || blurred;
+      setIsPaused(effectivelyPaused);
     }
 
     const intervalId = setInterval(tick, 100);
@@ -70,17 +78,33 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire, paused = f
       }
     }
 
+    function handleBlur() {
+      blurred = true;
+      setIsPaused(true);
+    }
+
+    function handleFocus() {
+      blurred = false;
+      setIsPaused(pausedRef.current || hidden);
+      lastTickAt = Date.now();
+      tick();
+    }
+
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", handleVisibilityChange);
+      window.addEventListener("blur", handleBlur);
+      window.addEventListener("focus", handleFocus);
     }
 
     return () => {
       clearInterval(intervalId);
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
+        window.removeEventListener("blur", handleBlur);
+        window.removeEventListener("focus", handleFocus);
       }
     };
-  }, [durationSeconds, deadlineAt]);
+  }, [durationSeconds, deadlineAt, paused]);
 
-  return { timeLeftMs };
+  return { timeLeftMs, isPaused };
 }
