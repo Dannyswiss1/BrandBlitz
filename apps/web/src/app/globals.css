@@ -133,10 +133,37 @@ a {
   animation: usdc-pulse 1.5s ease-in-out 2;
 }
 
+/* ── Skeleton shimmer ─────────────────────────────────────────────────────── */
+@keyframes skeleton-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--foreground) 8%, transparent),
+    transparent
+  );
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
 /* ── Disable animations for reduced motion ────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .confetti-piece,
-  .usdc-pulse {
+  .usdc-pulse,
+  .skeleton-shimmer::after {
     animation: none !important;
   }
   *,

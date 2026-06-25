@@ -1,9 +1,142 @@
 import type { ChallengeQuestion } from "../db/queries/challenges";
+import type { PoolClient } from "pg";
 import { calculatePayoutShareStroops, stroopsToUsdc, usdcToStroops } from "../lib/usdc";
+import type { GameSession } from "../db/queries/sessions";
 
 const BASE_POINTS = 100;
 const MAX_SPEED_BONUS = 50;
 const ROUND_DURATION_MS = 15_000;
+
+export const MAX_ROUND_SCORE = BASE_POINTS + MAX_SPEED_BONUS;
+export const MAX_TOTAL_SCORE = MAX_ROUND_SCORE * 3;
+
+export interface ScoreValidationError {
+  valid: false;
+  code: string;
+  message: string;
+  score: number;
+}
+
+export function validateRoundScore(score: number): ScoreValidationError | { valid: true } {
+  if (!Number.isFinite(score) || score < 0 || score > MAX_ROUND_SCORE) {
+    return {
+      valid: false,
+      code: "ROUND_SCORE_OUT_OF_RANGE",
+      message: `Round score ${score} is outside valid range [0, ${MAX_ROUND_SCORE}]`,
+      score,
+    };
+  }
+  return { valid: true };
+}
+
+export function validateTotalScore(score: number): ScoreValidationError | { valid: true } {
+  if (!Number.isFinite(score) || score < 0 || score > MAX_TOTAL_SCORE) {
+    return {
+      valid: false,
+      code: "TOTAL_SCORE_OUT_OF_RANGE",
+      message: `Total score ${score} is outside valid range [0, ${MAX_TOTAL_SCORE}]`,
+      score,
+    };
+  }
+  return { valid: true };
+}
+
+async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
+  const { pool } = await import("../db");
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const result = await callback(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function isLockTimeout(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === "55P03"
+  );
+}
+
+function createServiceError(message: string, statusCode: number, code?: string): Error {
+  const error = new Error(message) as Error & { statusCode?: number; code?: string };
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+export async function completeWarmupWithLock(params: {
+  userId: string;
+  challengeId: string;
+  nowMs?: () => number;
+}): Promise<GameSession> {
+  const nowMs = params.nowMs ?? Date.now;
+  const [{ config }, { redis }] = await Promise.all([
+    import("../lib/config"),
+    import("../lib/redis"),
+  ]);
+
+  try {
+    return await withTransaction(async (client) => {
+      await client.query("SELECT set_config('lock_timeout', $1, true)", [
+        `${config.WARMUP_COMPLETE_LOCK_TIMEOUT_MS}ms`,
+      ]);
+
+      const sessionResult = await client.query<GameSession>(
+        `SELECT *
+         FROM game_sessions
+         WHERE user_id = $1
+           AND challenge_id = $2
+         FOR UPDATE`,
+        [params.userId, params.challengeId]
+      );
+      const session = sessionResult.rows[0];
+      if (!session) throw createServiceError("Session not found", 404);
+
+      if (session.warmup_completed_at) {
+        throw createServiceError("Warm-up already completed", 409, "WARMUP_ALREADY_COMPLETED");
+      }
+
+      const unlockAt = await redis.get(`warmup:unlock:${session.id}`);
+      if (unlockAt) {
+        const remainingMs = parseInt(unlockAt, 10) - nowMs();
+        if (remainingMs > 0) {
+          const error = createServiceError("Warm-up minimum not yet elapsed", 400, "WARMUP_TOO_FAST");
+          (error as any).remainingMs = remainingMs;
+          throw error;
+        }
+      }
+
+      const completedResult = await client.query<GameSession>(
+        `UPDATE game_sessions
+         SET warmup_completed_at = NOW()
+         WHERE id = $1
+           AND warmup_completed_at IS NULL
+         RETURNING *`,
+        [session.id]
+      );
+      const completed = completedResult.rows[0];
+      if (!completed) {
+        throw createServiceError("Warm-up already completed", 409, "WARMUP_ALREADY_COMPLETED");
+      }
+
+      return completed;
+    });
+  } catch (error) {
+    if (isLockTimeout(error)) {
+      throw createServiceError("Warm-up completion is already in progress", 409, "WARMUP_LOCK_TIMEOUT");
+    }
+    throw error;
+  }
+}
 
 /**
  * Calculate score for a single round answer.

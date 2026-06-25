@@ -14,9 +14,9 @@ import { stroopsToUsdc } from "../lib/usdc";
 import { getStreak, repairStreak } from "../services/streaks";
 import {
   sendVerificationCode,
-  checkVerificationCode,
   hashPhoneNumber,
   normalizePhoneNumber,
+  verifyOtpWithBruteForceProtection,
 } from "../services/phone";
 import { authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
@@ -150,6 +150,7 @@ router.get("/:id/badges", authenticate, async (req, res) => {
 router.patch("/me/wallet", authenticate, async (req, res) => {
   const { stellarAddress } = z
     .object({ stellarAddress: z.string().min(56).max(70) })
+    .strict()
     .parse(req.body);
 
   await updateUserWallet(req.user!.sub, stellarAddress);
@@ -239,18 +240,20 @@ router.post("/me/phone/verify", authenticate, async (req, res) => {
     throw createError("Phone number already associated with another account", 409);
   }
 
-  const approved = await checkVerificationCode(normalizedPhone, code);
-  if (!approved) {
-    const attemptsKey = `phone:verify:${phoneHash}`;
-    const attempts = await redis.incr(attemptsKey);
-    if (attempts === 1) await redis.expire(attemptsKey, 300);
-    throw createError("Invalid verification code", 400);
+  // verifyOtpWithBruteForceProtection throws 429 (with retryAfter) on lockout,
+  // 400 on wrong code, and nothing on success.
+  try {
+    await verifyOtpWithBruteForceProtection(normalizedPhone, code);
+  } catch (err: any) {
+    if (err.statusCode === 429 && err.retryAfter != null) {
+      res.set("Retry-After", String(err.retryAfter));
+    }
+    throw err;
   }
 
   const existingKey = `phone:hash:${phoneHash}`;
   await markPhoneVerified(req.user!.sub, phoneHash);
   await redis.set(existingKey, req.user!.sub, "EX", 86400 * 365);
-  await redis.del(`phone:verify:${phoneHash}`);
 
   res.json({ success: true });
 });

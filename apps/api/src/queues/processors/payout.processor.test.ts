@@ -40,15 +40,17 @@ vi.mock("../../db", () => ({
   query: mocks.query,
 }));
 
+type PayoutJobData = { challengeId: string; requestId?: string };
+
 class FakeWorker {
   readonly queueName: string;
-  readonly processor: (job: Job<{ challengeId: string }>) => Promise<void>;
+  readonly processor: (job: Job<PayoutJobData>) => Promise<void>;
   readonly options: typeof payoutWorkerOptions;
   readonly handlers = new Map<string, (...args: unknown[]) => void>();
 
   constructor(
     queueName: string,
-    processor: (job: Job<{ challengeId: string }>) => Promise<void>,
+    processor: (job: Job<PayoutJobData>) => Promise<void>,
     options: typeof payoutWorkerOptions
   ) {
     this.queueName = queueName;
@@ -62,24 +64,24 @@ class FakeWorker {
   }
 }
 
-function makeJob(id: string, challengeId: string, attemptsMade = 0): Job<{ challengeId: string }> {
+function makeJob(id: string, challengeId: string, attemptsMade = 0): Job<PayoutJobData> {
   return {
     id,
     data: { challengeId },
     attemptsMade,
-  } as Job<{ challengeId: string }>;
+  } as Job<PayoutJobData>;
 }
 
 async function runWithRetries(
-  processor: (job: Job<{ challengeId: string }>) => Promise<void>,
-  job: Job<{ challengeId: string }>,
+  processor: (job: Job<PayoutJobData>) => Promise<void>,
+  job: Job<PayoutJobData>,
   attempts: number
 ): Promise<{ attemptsMade: number; error?: Error }> {
   let attemptsMade = 0;
 
   while (attemptsMade < attempts) {
     try {
-      await processor({ ...job, attemptsMade } as Job<{ challengeId: string }>);
+      await processor({ ...job, attemptsMade } as Job<PayoutJobData>);
       return { attemptsMade: attemptsMade + 1 };
     } catch (error) {
       attemptsMade += 1;
@@ -93,8 +95,8 @@ async function runWithRetries(
 }
 
 async function runWithConcurrency(
-  processor: (job: Job<{ challengeId: string }>) => Promise<void>,
-  jobs: Job<{ challengeId: string }>[],
+  processor: (job: Job<PayoutJobData>) => Promise<void>,
+  jobs: Job<PayoutJobData>[],
   concurrency: number
 ): Promise<{ maxInFlight: number }> {
   let maxInFlight = 0;

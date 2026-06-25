@@ -180,4 +180,27 @@ describeIntegration("payouts db queries", () => {
     expect(payout.amount_usdc).toBe(preciseAmount);
     expect(payout.amount_stroops).toBe("1234567890");
   });
+
+  it("getPayoutsByIds fetches multiple payouts in single query with correct ordering", async () => {
+    const userId1 = await createUser("batch-1");
+    const userId2 = await createUser("batch-2");
+    const brandId = await createBrand(userId1);
+    const challengeId = await createChallenge(brandId);
+
+    const p1 = await payouts.createPayout({ challengeId, userId: userId1, stellarAddress: "GADDR1", amountUsdc: "10.0" });
+    const p2 = await payouts.createPayout({ challengeId, userId: userId2, stellarAddress: "GADDR2", amountUsdc: "20.0" });
+
+    // Request in reverse order — results should match input order
+    const results = await payouts.getPayoutsByIds([p2.id, p1.id]);
+    expect(results).toHaveLength(2);
+    expect(results[0].id).toBe(p2.id);
+    expect(results[1].id).toBe(p1.id);
+    expect(results[0].stellar_address).toBe("GADDR2");
+    expect(results[1].stellar_address).toBe("GADDR1");
+  });
+
+  it("getPayoutsByIds returns empty array when no IDs provided", async () => {
+    const results = await payouts.getPayoutsByIds([]);
+    expect(results).toEqual([]);
+  });
 });

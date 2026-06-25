@@ -6,6 +6,7 @@ export interface GameSession {
   user_id: string;
   challenge_id: string;
   device_id: string | null;
+  status: "warmup" | "active" | "completed" | "flagged" | "abandoned";
   warmup_started_at: string | null;
   warmup_completed_at: string | null;
   challenge_started_at: string | null;
@@ -82,6 +83,19 @@ export async function getSession(userId: string, challengeId: string): Promise<G
     [userId, challengeId]
   );
   return result.rows[0] ?? null;
+}
+
+export async function deleteOpenSession(userId: string, challengeId: string): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM game_sessions
+     WHERE user_id = $1
+       AND challenge_id = $2
+       AND status IN ('warmup', 'active', 'abandoned')
+     RETURNING id`,
+    [userId, challengeId]
+  );
+
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function markWarmupStarted(sessionId: string): Promise<void> {

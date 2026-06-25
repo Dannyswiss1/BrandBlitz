@@ -57,6 +57,12 @@ export const viewport = {
   initialScale: 1,
 };
 
+// SRI hashes for external scripts (update these when upgrading external dependencies)
+const SRI_HASHES: Record<string, string> = {
+  // Example: Add SRI hashes for external scripts here
+  // "https://cdn.example.com/script.js": "sha384-abc123...",
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const nonce = getCspNonce();
 

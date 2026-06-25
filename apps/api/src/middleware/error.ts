@@ -62,6 +62,10 @@ export function errorHandler(
       path: issue.path,
       message: issue.message,
       code: issue.code,
+      // Surface the rejected field names when strict() rejects unknown keys.
+      ...(issue.code === "unrecognized_keys"
+        ? { keys: (issue as import("zod").ZodUnrecognizedKeysIssue).keys }
+        : {}),
     }));
   }
 

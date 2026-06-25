@@ -107,11 +107,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @brandblitz/storage test
 
+  # ── Benchmark stellar package ───────────────────────────────────────────────
+  bench-stellar:
+    name: Stellar muxed account benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run muxed account slug generation benchmark
+        run: pnpm --filter @brandblitz/stellar bench
+      - name: Log benchmark results (informational only - no hard budget failure)
+        run: echo "Benchmark completed. Review ops/sec in logs above."
+
   # ── Build + source-map upload (Sentry) ──────────────────────────────────────
   build:
     name: Build & upload source maps
     runs-on: ubuntu-latest
-    needs: [test-api, test-web, test-storage]
+    needs: [test-api, test-web, test-storage, bench-stellar]
     # Only upload maps on pushes to main (not PRs — avoids noise & token exposure)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:

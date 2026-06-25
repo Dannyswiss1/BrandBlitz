@@ -12,6 +12,8 @@ import { errorHandler } from "./middleware/error";
 import { referralAttributionMiddleware } from "./middleware/referral-attribution";
 import { apiLimiter } from "./middleware/rate-limit";
 import { requireHttps } from "./middleware/require-https";
+import { requireJsonContentType } from "./middleware/require-json-content-type";
+import { requestId } from "./middleware/request-id";
 import { connectDb, closeDb, query } from "./db";
 import { connectRedis, redis } from "./lib/redis";
 import { payoutQueue } from "./queues/payout.queue";
@@ -123,7 +125,9 @@ app.use(
 );
 app.use(cookieParser());
 app.use(requireHttps);
+app.use(requestId);
 app.use(referralAttributionMiddleware);
+app.use(requireJsonContentType);
 app.use(
   compression({
     threshold: 1024,

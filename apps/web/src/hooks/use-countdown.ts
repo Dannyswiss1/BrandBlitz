@@ -11,90 +11,83 @@ interface UseCountdownOptions {
    */
   deadlineAt?: number;
   onExpire?: () => void;
+  paused?: boolean;
 }
 
-export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCountdownOptions) {
+export function useCountdown({ durationSeconds, deadlineAt, onExpire, paused = false }: UseCountdownOptions) {
   const [timeLeftMs, setTimeLeftMs] = useState(durationSeconds * 1000);
-  const [isPaused, setIsPaused] = useState(false);
+  const [isPaused, setIsPaused] = useState(paused);
   const onExpireRef = useRef(onExpire);
+  const pausedRef = useRef(paused);
   onExpireRef.current = onExpire;
+  pausedRef.current = paused;
 
   useEffect(() => {
     const totalMs = durationSeconds * 1000;
     setTimeLeftMs(totalMs);
-    setIsPaused(false);
+    setIsPaused(paused || (typeof document !== "undefined" && document.visibilityState === "hidden"));
 
-    const startTime = deadlineAt != null ? Date.now() - (totalMs - (deadlineAt - Date.now())) : Date.now();
+    let remainingMs = deadlineAt != null ? Math.max(0, deadlineAt - Date.now()) : totalMs;
+    let lastTickAt = Date.now();
+    let expired = false;
+    let hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    let blurred = false;
 
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-    let paused = false;
-
-    function getRemaining(): number {
+    function readRemaining(): number {
       if (deadlineAt != null) {
         return Math.max(0, deadlineAt - Date.now());
       }
-      const elapsed = Date.now() - startTime;
-      return Math.max(0, totalMs - elapsed);
+      return remainingMs;
     }
 
     function tick() {
-      if (paused) return;
-      const remaining = getRemaining();
+      const now = Date.now();
+
+      if (!pausedRef.current && !hidden && !blurred && deadlineAt == null) {
+        remainingMs = Math.max(0, remainingMs - (now - lastTickAt));
+      }
+
+      lastTickAt = now;
+      const remaining = deadlineAt != null && !pausedRef.current && !hidden && !blurred
+        ? Math.max(0, deadlineAt - now)
+        : readRemaining();
+
       setTimeLeftMs(remaining);
-      if (remaining === 0) {
-        if (intervalId != null) clearInterval(intervalId);
-        intervalId = null;
+      if (remaining === 0 && !expired) {
+        expired = true;
         onExpireRef.current?.();
       }
+
+      // Sync isPaused state for UI display
+      const effectivelyPaused = pausedRef.current || hidden || blurred;
+      setIsPaused(effectivelyPaused);
     }
 
-    function startInterval() {
-      if (intervalId != null) return;
-      intervalId = setInterval(tick, 100);
-    }
+    const intervalId = setInterval(tick, 100);
 
-    function stopInterval() {
-      if (intervalId != null) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    }
-
-    function pause() {
-      if (paused) return;
-      paused = true;
-      setIsPaused(true);
-      stopInterval();
-    }
-
-    function resume() {
-      if (!paused) return;
-      paused = false;
-      setIsPaused(false);
-      tick();
-      if (getRemaining() > 0) {
-        startInterval();
-      }
-    }
-
+    // Pause the countdown when the tab is hidden to prevent background timing
+    // from advancing the displayed counter without the user seeing it. Deadline
+    // based timers still re-sync when visible and online again.
     function handleVisibilityChange() {
       if (document.visibilityState === "hidden") {
-        pause();
+        hidden = true;
       } else {
-        resume();
+        hidden = false;
+        lastTickAt = Date.now();
+        tick();
       }
     }
 
     function handleBlur() {
-      pause();
+      blurred = true;
+      setIsPaused(true);
     }
 
     function handleFocus() {
-      resume();
-    }
-
-    if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
-      startInterval();
+      blurred = false;
+      setIsPaused(pausedRef.current || hidden);
+      lastTickAt = Date.now();
+      tick();
     }
 
     if (typeof document !== "undefined") {
@@ -104,14 +97,14 @@ export function useCountdown({ durationSeconds, deadlineAt, onExpire }: UseCount
     }
 
     return () => {
-      stopInterval();
+      clearInterval(intervalId);
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
         window.removeEventListener("blur", handleBlur);
         window.removeEventListener("focus", handleFocus);
       }
     };
-  }, [durationSeconds, deadlineAt]);
+  }, [durationSeconds, deadlineAt, paused]);
 
   return { timeLeftMs, isPaused };
 }

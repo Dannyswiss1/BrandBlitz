@@ -2,7 +2,8 @@ import { Worker, type Job, type WorkerOptions } from "bullmq";
 import { redis } from "../../lib/redis";
 import { logger } from "../../lib/logger";
 import { addUtcDays, getUtcWeekStart } from "../../lib/week";
-import { rankAndFlagWeek, recalculateWeeklyPoints, seedWeekAssignments } from "../../db/queries/leagues";
+import { query } from "../../db";
+import { seedWeekAssignments } from "../../db/queries/leagues";
 import { forwardToDlq, leagueDlqQueue } from "../dlq";
 
 export function createLeagueWorker(WorkerCtor: typeof Worker = Worker, opts?: WorkerOptions) {
@@ -12,9 +13,7 @@ export function createLeagueWorker(WorkerCtor: typeof Worker = Worker, opts?: Wo
       if (job.name === "finalize-week") {
         const weekStart = getUtcWeekStart(new Date());
         logger.info("Finalizing league week", { weekStart, weekEndExclusive: addUtcDays(weekStart, 7) });
-        await recalculateWeeklyPoints(weekStart);
-        await rankAndFlagWeek(weekStart);
-        await checkAndAwardLeagueDiamondBadges(weekStart);
+        await query("SELECT recalculate_league($1)", [weekStart]);
         return;
       }
 
@@ -22,7 +21,6 @@ export function createLeagueWorker(WorkerCtor: typeof Worker = Worker, opts?: Wo
         const weekStart = getUtcWeekStart(new Date());
         logger.info("Seeding league week", { weekStart });
         await seedWeekAssignments(weekStart);
-        await checkAndAwardLeaguePromotionBadges(weekStart);
         return;
       }
 

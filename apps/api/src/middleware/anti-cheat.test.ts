@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { validateReactionTime, validateDeviceFingerprint, enforceOneSessionPerChallenge, BOT_REACTION_THRESHOLD_MS, MIN_HUMAN_REACTION_MS } from "./anti-cheat";
+import { validateReactionTime, validateDeviceFingerprint, enforceOneSessionPerChallenge, BOT_REACTION_THRESHOLD_MS, MIN_HUMAN_REACTION_MS, validateRoundScore, assertValidTotalScore } from "./anti-cheat";
 import * as fraudQueries from "../db/queries/fraud-flags";
 import { metrics } from "../lib/metrics";
 import * as sessionQueries from "../db/queries/sessions";
@@ -203,6 +203,74 @@ describe("anti-cheat middleware", () => {
         statusCode: 404,
       });
       expect(next).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("validateRoundScore", () => {
+    it("calls next when roundScore is not in body", async () => {
+      req.body = {};
+      await validateRoundScore(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("calls next for valid roundScore = 0", async () => {
+      req.body.roundScore = 0;
+      await validateRoundScore(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("calls next for valid roundScore = 150", async () => {
+      req.body.roundScore = 150;
+      await validateRoundScore(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("rejects with 422 when roundScore = 151", async () => {
+      req.body.roundScore = 151;
+      await expect(validateRoundScore(req, res, next)).rejects.toMatchObject({
+        statusCode: 422,
+        code: "ROUND_SCORE_OUT_OF_RANGE",
+      });
+      expect(fraudQueries.createFraudFlag).toHaveBeenCalled();
+    });
+
+    it("rejects with 422 when roundScore = -1", async () => {
+      req.body.roundScore = -1;
+      await expect(validateRoundScore(req, res, next)).rejects.toMatchObject({
+        statusCode: 422,
+        code: "ROUND_SCORE_OUT_OF_RANGE",
+      });
+      expect(fraudQueries.createFraudFlag).toHaveBeenCalled();
+    });
+  });
+
+  describe("assertValidTotalScore", () => {
+    it("does not throw for score = 0", () => {
+      expect(() => assertValidTotalScore(0)).not.toThrow();
+    });
+
+    it("does not throw for score = 450", () => {
+      expect(() => assertValidTotalScore(450)).not.toThrow();
+    });
+
+    it("throws 422 for score = 451", () => {
+      expect(() => assertValidTotalScore(451)).toThrow();
+      try {
+        assertValidTotalScore(451);
+      } catch (err: any) {
+        expect(err.statusCode).toBe(422);
+        expect(err.code).toBe("TOTAL_SCORE_OUT_OF_RANGE");
+      }
+    });
+
+    it("throws 422 for score = -1", () => {
+      expect(() => assertValidTotalScore(-1)).toThrow();
+      try {
+        assertValidTotalScore(-1);
+      } catch (err: any) {
+        expect(err.statusCode).toBe(422);
+        expect(err.code).toBe("TOTAL_SCORE_OUT_OF_RANGE");
+      }
     });
   });
 });

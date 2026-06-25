@@ -43,9 +43,11 @@ const KnownConfigSchema = z.discriminatedUnion("key", [
   }),
 ]);
 
+// .strict() rejects any extra keys in the PATCH body (e.g. {value: ..., injected: ...}).
+// The value shape itself is validated by KnownConfigSchema after body parsing.
 const PatchConfigSchema = z.object({
   value: z.any(),
-});
+}).strict();
 
 /**
  * PATCH /admin/config/:key

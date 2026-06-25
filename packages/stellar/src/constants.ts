@@ -22,3 +22,7 @@ export const WARMUP_MIN_SECONDS = 20;
 export const CHALLENGE_SECONDS = 45;
 export const ROUND_SECONDS = 15;
 export const MAX_ROUNDS = 3;
+
+// Minimum pool amount in stroops (100 USDC = 1,000,000,000 stroops)
+// Used by challenge creation validation to prevent dust-level prize pools
+export const MIN_POOL_STROOPS = 1_000_000_000;

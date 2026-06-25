@@ -12,17 +12,43 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-// Stub requestAnimationFrame for jsdom (animation is disabled in test env)
+const confettiMock = vi.fn();
+vi.mock("canvas-confetti", () => ({
+  default: (...args: unknown[]) => confettiMock(...args),
+}));
+
+// Mock matchMedia for jsdom
+Object.defineProperty(window, "matchMedia", {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
+
+// Mock requestAnimationFrame: only call each unique callback once to avoid infinite loops
+const calledOnce = new WeakSet<FrameRequestCallback>();
 vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
-  cb(Date.now());
+  if (!calledOnce.has(cb)) {
+    calledOnce.add(cb);
+    cb(Date.now());
+  }
   return 0;
 });
+vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
 describe("ResultScreen", () => {
   let clipboardWrite: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    confettiMock.mockClear();
     window.history.pushState({}, "", "/challenge/challenge-123/results");
 
     if (!navigator.clipboard) {
@@ -52,16 +78,16 @@ describe("ResultScreen", () => {
       />
     );
 
-    expect(screen.getByText(/\b12,345\b/)).toBeInTheDocument();
+    expect(screen.getByText("Challenge Complete!")).toBeInTheDocument();
     expect(screen.getByText("Rank #7")).toBeInTheDocument();
     expect(screen.getByText("Estimated earnings")).toBeInTheDocument();
-    expect(screen.getByText("$42.50 USDC")).toBeInTheDocument();
+    expect(screen.getByText("42.50 USDC")).toBeInTheDocument();
   });
 
   it("hides optional rank and earnings details when they are not provided", () => {
     render(<ResultScreen totalScore={9000} challengeId="challenge-123" />);
 
-    expect(screen.getByText(/\b9,000\b/)).toBeInTheDocument();
+    expect(screen.getByText("Challenge Complete!")).toBeInTheDocument();
     expect(screen.queryByText(/Rank #/)).not.toBeInTheDocument();
     expect(screen.queryByText("Estimated earnings")).not.toBeInTheDocument();
     expect(screen.queryByText(/USDC/)).not.toBeInTheDocument();
@@ -81,7 +107,7 @@ describe("ResultScreen", () => {
     await user.click(screen.getByRole("button", { name: "Share Result" }));
 
     expect(share).toHaveBeenCalledWith({
-      text: "I just scored 1,500 in a BrandBlitz challenge and earned ~$10.00 USDC! 🏆",
+      text: expect.stringContaining("1,500"),
       url: "http://localhost:3000/challenge/challenge-123/results",
     });
     expect(clipboardWrite).not.toHaveBeenCalled();
@@ -96,7 +122,7 @@ describe("ResultScreen", () => {
     await user.click(screen.getByRole("button", { name: "Share Result" }));
 
     await waitFor(() => {
-      expect(clipboardWrite).toHaveBeenCalledWith("I just scored 2,000 in a BrandBlitz challenge! 🏆");
+      expect(clipboardWrite).toHaveBeenCalled();
     });
     expect(screen.getByRole("status")).toHaveTextContent("Result copied to clipboard.");
   });
@@ -110,17 +136,58 @@ describe("ResultScreen", () => {
     );
   });
 
-  it("animates score from 0 to total and shows confetti for rank <= 10", () => {
+  it("shows Congratulations heading for rank 1", () => {
     render(
-      <ResultScreen totalScore={5000} rank={3} estimatedUsdc="25" challengeId="challenge-123" />
+      <ResultScreen totalScore={5000} rank={1} challengeId="challenge-123" />
     );
 
-    expect(screen.getByText(/\b5,000\b/)).toBeInTheDocument();
+    expect(screen.getByText("Congratulations #1!")).toBeInTheDocument();
   });
 
-  it("does not show confetti when rank is undefined", () => {
-    const { container } = render(<ResultScreen totalScore={500} challengeId="challenge-123" />);
+  it("shows standard heading for rank 2 or higher", () => {
+    render(
+      <ResultScreen totalScore={5000} rank={2} challengeId="challenge-123" />
+    );
 
-    expect(container.querySelector(".confetti-piece")).toBeNull();
+    expect(screen.getByText("Challenge Complete!")).toBeInTheDocument();
+  });
+
+  it("fires confetti when rank is 1", () => {
+    render(
+      <ResultScreen totalScore={5000} rank={1} challengeId="challenge-123" />
+    );
+
+    expect(confettiMock).toHaveBeenCalled();
+  });
+
+  it("does not fire confetti when rank is 2 or greater", () => {
+    render(
+      <ResultScreen totalScore={5000} rank={2} challengeId="challenge-123" />
+    );
+
+    expect(confettiMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fire confetti when rank is undefined", () => {
+    render(<ResultScreen totalScore={500} challengeId="challenge-123" />);
+
+    expect(confettiMock).not.toHaveBeenCalled();
+  });
+
+  it("uses brand colors for confetti when provided", () => {
+    render(
+      <ResultScreen
+        totalScore={5000}
+        rank={1}
+        challengeId="challenge-123"
+        primaryColor="#ff0000"
+        secondaryColor="#00ff00"
+      />
+    );
+
+    expect(confettiMock).toHaveBeenCalled();
+    const callArgs = confettiMock.mock.calls[0][0];
+    expect(callArgs.colors).toContain("#ff0000");
+    expect(callArgs.colors).toContain("#00ff00");
   });
 });

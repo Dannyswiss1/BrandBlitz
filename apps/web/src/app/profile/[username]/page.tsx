@@ -12,6 +12,7 @@ import {
   BadgeGrid,
   type Badge as UserBadge,
 } from "@/components/gamification/badge-grid";
+import { OfflineBanner } from "@/components/layout/offline-banner";
 import type { Metadata } from "next";
 
 interface ProfilePageProps {
@@ -124,7 +125,9 @@ export default async function ProfilePage({ params }: ProfilePageProps) {
   const progress = Math.min(1, safeDivide(streak, nextMilestone, 0));
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-12">
+    <>
+      <OfflineBanner />
+      <main className="mx-auto max-w-2xl px-6 py-12">
       {/* Profile header */}
       <div className="mb-10 flex items-center gap-6">
         {user.avatarUrl ? (
@@ -258,6 +261,7 @@ export default async function ProfilePage({ params }: ProfilePageProps) {
           }
         />
       )}
-    </main>
+      </main>
+    </>
   );
 }

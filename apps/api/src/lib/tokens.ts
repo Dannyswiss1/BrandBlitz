@@ -35,7 +35,18 @@ function previousAccessSecret(): string | undefined {
 }
 
 export function signAccessToken(user: { id: string; email: string; role?: string | null }): string {
-  return jwt.sign({ sub: user.id, email: user.email, role: user.role ?? "player", jti: randomUUID() }, accessSecret(), { expiresIn: ACCESS_TOKEN_TTL });
+  return jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+      role: user.role ?? "player",
+      jti: randomUUID(),
+      iss: config.JWT_ISSUER,
+      aud: config.JWT_AUDIENCE,
+    },
+    accessSecret(),
+    { expiresIn: ACCESS_TOKEN_TTL }
+  );
 }
 
 export function signRefreshToken(user: { id: string; email: string }): string {
