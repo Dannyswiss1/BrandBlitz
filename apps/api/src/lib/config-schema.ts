@@ -94,6 +94,9 @@ export const configSchema = z.object({
 
   // Admin bootstrap — if set, this email is granted admin role on API boot
   ADMIN_BOOTSTRAP_EMAIL: z.string().email().optional(),
-});
 
+  // Next.js revalidation — secret for on-demand ISR revalidation
+  REVALIDATE_SECRET: z.string().min(16).optional(),
+  NEXT_REVALIDATE_URL: z.string().url().optional(),
+});
 export type Config = z.infer<typeof configSchema>;

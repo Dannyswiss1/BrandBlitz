@@ -6,7 +6,7 @@ import {
   getTopSessionsPerChallenge,
   getGlobalLeaderboardFromView,
 } from "../db/queries/sessions";
-import { cached } from "../lib/cache";
+import { withCoalescing } from "../lib/cache";
 
 const router = Router();
 
@@ -107,7 +107,7 @@ router.get("/global", async (req, res) => {
     offset: z.coerce.number().min(0).default(0),
   }).parse(req.query);
 
-  const response = await cached(`leaderboard:global:${limit}:${offset}`, 300, async () => {
+  const response = await withCoalescing(`leaderboard:global:${limit}:${offset}`, 300, async () => {
     const challenges = await getActiveChallenges(10);
     const challengeIds = challenges.map((c) => c.id);
 

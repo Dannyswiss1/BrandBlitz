@@ -1,5 +1,5 @@
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
-import { getRpcServer, getUsdcAsset, getNetworkConfig, type NetworkName } from "./client";
+import { getRpcServer, getUsdcAsset, getNetworkConfig, withRetry, type NetworkName, type RetryOptions } from "./client";
 import { DEPOSIT_POLL_INTERVAL_MS } from "./constants";
 
 export interface DepositEvent {
@@ -9,6 +9,13 @@ export interface DepositEvent {
   to: string;
   ledger: number;
   createdAt: string;
+}
+
+export interface DepositConfirmationUpdate {
+  txHash: string;
+  memo: string;
+  ledger: number;
+  confirmationCount: number;
 }
 
 export type DepositMemoValidation =
@@ -40,26 +47,33 @@ export async function fetchDepositEvents(
   const usdc = getUsdcAsset(network);
   const { networkPassphrase } = getNetworkConfig(network);
 
-  const response = await rpc.getEvents({
-    startLedger: fromLedger,
-    filters: [
-      {
-        type: "contract",
-        // SAC (Stellar Asset Contract) transfer events for USDC
-        contractIds: [usdc.contractId(networkPassphrase)],
-        topics: [
-          ["transfer", "*", hotWalletAddress],
+  const response = await withRetry(
+    () =>
+      rpc.getEvents({
+        startLedger: fromLedger,
+        filters: [
+          {
+            type: "contract",
+            // SAC (Stellar Asset Contract) transfer events for USDC
+            contractIds: [usdc.contractId(networkPassphrase)],
+            topics: [
+              ["transfer", "*", hotWalletAddress],
+            ],
+          },
         ],
-      },
-    ],
-    limit: 200,
-  });
+        limit: 200,
+      }),
+    { maxAttempts: 5, baseDelayMs: 250, maxDelayMs: 30_000 }
+  );
 
   const events: DepositEvent[] = [];
 
   for (const event of response.events) {
     try {
-      const txMeta = await rpc.getTransaction(event.txHash);
+      const txMeta = await withRetry(
+        () => rpc.getTransaction(event.txHash),
+        { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 5_000 }
+      );
       if (txMeta.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
         console.warn(`Skipping unsuccessful transaction: ${event.txHash}`, { status: txMeta.status });
         continue;
@@ -108,4 +122,46 @@ export async function fetchDepositEvents(
  */
 export function getDepositPollInterval(): number {
   return DEPOSIT_POLL_INTERVAL_MS;
+}
+
+/**
+ * Check if a transaction still exists at a specific ledger height.
+ * Used to verify deposit transactions haven't been reverted.
+ *
+ * @param txHash - Transaction hash to verify
+ * @param ledger - Ledger height where transaction was confirmed
+ * @param network - Stellar network
+ * @returns Number of confirmations (ledgers since transaction), or 0 if not found
+ */
+export async function getDepositConfirmationCount(
+  txHash: string,
+  txLedger: number,
+  network: NetworkName = "testnet"
+): Promise<number> {
+  const rpc = getRpcServer(network);
+
+  try {
+    const txMeta = await withRetry(
+      () => rpc.getTransaction(txHash),
+      { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 5_000 }
+    );
+
+    if (txMeta.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      return 0;
+    }
+
+    // Get current ledger
+    const health = await withRetry(
+      () => rpc.getHealth(),
+      { maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 2_000 }
+    );
+
+    const currentLedger = health.ledger.sequence;
+    const confirmations = Math.max(0, currentLedger - txLedger);
+
+    return confirmations;
+  } catch (err) {
+    console.warn(`Error checking deposit confirmations for ${txHash}:`, err);
+    return 0;
+  }
 }

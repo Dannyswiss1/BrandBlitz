@@ -10,6 +10,10 @@ import {
   DLQ_SOURCE_QUEUES,
   type DeadLetterPayload,
 } from "../queues/dlq";
+import { feeBumpTransaction } from "@brandblitz/stellar";
+import { updatePayoutFeeBumpStatus } from "../db/queries/payouts";
+import { config } from "../lib/config";
+import { query } from "../db/index";
 
 const router = Router();
 
@@ -108,6 +112,137 @@ router.post("/dlq/:queue/:jobId/retry", async (req, res) => {
   });
 
   res.json({ retried: true, replayedJobId: replay.id });
+});
+
+// ── Fee Bump Transaction Recovery ────────────────────────────────────────────
+
+/**
+ * POST /admin/payouts/:id/fee-bump
+ * Manually trigger a fee bump for a stuck payout transaction.
+ * Admin can specify a custom max fee or use 2x current base fee.
+ */
+router.post("/payouts/:id/fee-bump", async (req, res) => {
+  const { id: payoutId } = z.object({ id: z.string().uuid() }).parse(req.params);
+  const { customMaxFeeStroops } = z
+    .object({
+      customMaxFeeStroops: z.number().int().min(100).optional(),
+    })
+    .parse(req.body);
+
+  // Fetch payout
+  const payout = await query<{
+    id: string;
+    tx_hash: string | null;
+    fee_bump_attempts: number;
+    status: string;
+  }>(
+    `SELECT id, tx_hash, fee_bump_attempts, status FROM payouts WHERE id = $1`,
+    [payoutId]
+  );
+
+  if (!payout.rows[0]) {
+    throw createError("Payout not found", 404);
+  }
+
+  const payoutRecord = payout.rows[0];
+
+  if (!payoutRecord.tx_hash) {
+    throw createError("Payout has no transaction hash to bump", 400);
+  }
+
+  if (payoutRecord.fee_bump_attempts >= 3) {
+    throw createError("Maximum fee bump attempts (3) exceeded", 400);
+  }
+
+  // Get current base fee from Horizon
+  const horizon = require("@brandblitz/stellar").getHorizonServer(config.STELLAR_NETWORK);
+  let baseFee = 100; // Default
+  try {
+    const ledger = await horizon.ledgers().order("desc").limit(1).call();
+    baseFee = ledger.records[0]?.base_fees_in_stroops ?? 100;
+  } catch (err) {
+    logger.warn("Failed to fetch base fee from Horizon, using default", { err });
+  }
+
+  // Calculate fee bump max fee
+  const maxFeeStroops = customMaxFeeStroops ?? baseFee * 2;
+
+  // Check ceiling from app_config
+  const configResult = await query<{ value: { maxFee: number } }>(
+    `SELECT value FROM app_config WHERE key = 'payout_max_fee_stroops'`
+  );
+  const maxFeeCeiling = configResult.rows[0]?.value?.maxFee ?? 5000;
+
+  if (maxFeeStroops > maxFeeCeiling) {
+    throw createError(
+      `Requested fee ${maxFeeStroops} exceeds ceiling ${maxFeeCeiling}`,
+      400,
+      "FEE_EXCEEDS_CEILING"
+    );
+  }
+
+  try {
+    // Mark as fee_bump_pending
+    await updatePayoutFeeBumpStatus(
+      payoutId,
+      "fee_bump_pending",
+      maxFeeStroops,
+      payoutRecord.tx_hash
+    );
+
+    // Submit fee bump
+    const result = await feeBumpTransaction(
+      payoutRecord.tx_hash,
+      maxFeeStroops,
+      config.HOT_WALLET_SECRET,
+      config.STELLAR_NETWORK as any
+    );
+
+    // Mark as completed with new fee bump tx hash
+    await query(
+      `UPDATE payouts
+       SET status = 'completed', tx_hash = $2, updated_at = NOW()
+       WHERE id = $1`,
+      [payoutId, result.feeBumpHash]
+    );
+
+    logger.info("Fee bump submitted successfully", {
+      payoutId,
+      originalTx: payoutRecord.tx_hash,
+      feeBumpTx: result.feeBumpHash,
+      maxFee: maxFeeStroops,
+      adminId: req.user!.sub,
+    });
+
+    res.json({
+      success: true,
+      payout: {
+        id: payoutId,
+        originalTx: payoutRecord.tx_hash,
+        feeBumpTx: result.feeBumpHash,
+        maxFee: maxFeeStroops,
+      },
+    });
+  } catch (error) {
+    // Mark as fee_bump_failed
+    await updatePayoutFeeBumpStatus(
+      payoutId,
+      "fee_bump_failed",
+      maxFeeStroops,
+      payoutRecord.tx_hash
+    );
+
+    logger.error("Fee bump submission failed", {
+      payoutId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    throw createError(
+      "Fee bump submission failed",
+      500,
+      "FEE_BUMP_FAILED"
+    );
+  }
 });
 
 export default router;

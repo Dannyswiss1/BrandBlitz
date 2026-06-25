@@ -1,6 +1,7 @@
 import {
   isRetriableStellarError,
   submitBatchPayout,
+  isInsufficientFeeError,
   type PayoutRecipient,
 } from "@brandblitz/stellar";
 import type { NetworkName } from "@brandblitz/stellar";
@@ -143,6 +144,45 @@ export async function processPayout(challengeId: string): Promise<void> {
   }
 
   const network = config.STELLAR_NETWORK as NetworkName;
+  let results;
+  try {
+    results = await submitBatchPayout(
+      recipients,
+      config.HOT_WALLET_SECRET,
+      challengeId,
+      network,
+      {
+        onInvalidRecipient: (recipient, reason) => {
+          logger.error("Invalid payout recipient skipped", {
+            challengeId,
+            address: recipient.address,
+            amount: recipient.amount,
+            reason,
+          });
+        },
+      }
+    );
+  } catch (error) {
+    // Check if this is an insufficient fee error that could be recovered with a fee bump
+    if (isInsufficientFeeError(error)) {
+      logger.warn("Insufficient fee error detected; fee bump recovery may be needed", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Re-throw to allow BullMQ to retry, but mark in logs for manual fee bump handling
+      throw error;
+    }
+
+    if (isRetriableStellarError(error)) {
+      logger.warn("Retriable Stellar payout error; allowing BullMQ retry", {
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    throw error;
+  }
 
   // Use escrow contract for settlement if CONTRACT_ID is configured
   if (config.SOROBAN_CONTRACT_ID) {
@@ -242,6 +282,7 @@ export async function processPayout(challengeId: string): Promise<void> {
           status,
           result.txHash || undefined,
           errorMessage,
+          result.success ? undefined : result.error
         );
         if (result.success) {
           await incrementUserEarnings(record.userId, record.amount);
@@ -280,6 +321,5 @@ export async function processPayout(challengeId: string): Promise<void> {
     return;
   }
 
-  logger.info("Payout complete", { challengeId, txHashes });
   logger.info("Payout complete via direct transfer", { challengeId, txHashes });
 }

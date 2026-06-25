@@ -26,6 +26,7 @@ import { updateStreak } from "../services/streaks";
 import { checkAndAwardSessionBadges } from "../services/badges";
 import { WARMUP_MIN_SECONDS } from "@brandblitz/stellar";
 import { tokenRevocationKey, tokenTtlSeconds } from "../middleware/authenticate";
+import { revalidateLeaderboard } from "../lib/revalidate";
 
 const router = Router();
 
@@ -231,6 +232,9 @@ router.post(
           total_score: completed.total_score,
           is_practice: completed.is_practice,
         });
+
+        // Trigger on-demand revalidation for leaderboard page
+        void revalidateLeaderboard();
       }
       const token = bearerToken(req);
       if (token) {

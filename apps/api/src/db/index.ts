@@ -1,7 +1,13 @@
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
-import { metrics } from "../lib/metrics";
+import {
+  metrics,
+  dbPoolTotalConnections,
+  dbPoolIdleConnections,
+  dbPoolWaitingClients,
+  dbPoolMaxConnections,
+} from "../lib/metrics";
 
 const pool = new Pool({
   connectionString: config.DATABASE_URL,
@@ -38,6 +44,17 @@ export async function connectDb(): Promise<void> {
 
 export async function closeDb(): Promise<void> {
   await pool.end();
+}
+
+/**
+ * Update Prometheus gauges with current PostgreSQL connection pool stats.
+ * Called at scrape time by the /metrics endpoint.
+ */
+export function updatePoolMetrics(): void {
+  dbPoolTotalConnections.set(pool.totalCount);
+  dbPoolIdleConnections.set(pool.idleCount);
+  dbPoolWaitingClients.set(pool.waitingCount);
+  dbPoolMaxConnections.set(config.DB_POOL_MAX);
 }
 
 export { pool };
