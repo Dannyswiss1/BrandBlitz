@@ -25,6 +25,7 @@ import { createError } from "../middleware/error";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
 import { MIN_POOL_STROOPS } from "@brandblitz/stellar";
+import { query } from "../db/index";
 
 const router = Router();
 
@@ -83,6 +84,38 @@ function validateChallengeEndsAt(endsAt: string): void {
     );
   }
 }
+
+/**
+ * GET /brands/public
+ * Public directory of all brands with active challenge counts. No auth required.
+ */
+router.get("/public", async (req, res) => {
+  const result = await query<{
+    id: string;
+    name: string;
+    tagline: string | null;
+    logo_url: string | null;
+    primary_color: string | null;
+    category: string | null;
+    active_challenge_count: number;
+  }>(
+    `SELECT
+       b.id,
+       b.name,
+       b.tagline,
+       b.logo_url,
+       b.primary_color,
+       NULL AS category,
+       COUNT(c.id) FILTER (WHERE c.status = 'active')::int AS active_challenge_count
+     FROM brands b
+     LEFT JOIN challenges c ON c.brand_id = b.id
+     WHERE b.deleted_at IS NULL
+     GROUP BY b.id
+     ORDER BY b.name ASC`
+  );
+
+  res.json({ brands: result.rows });
+});
 
 /**
  * GET /brands

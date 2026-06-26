@@ -194,4 +194,44 @@ router.get("/:id/deposit-info", authenticate, async (req, res) => {
   });
 });
 
+/**
+ * POST /challenges/:id/report
+ * Report inappropriate challenge content. Requires authentication.
+ * Rate-limited: one report per user per challenge.
+ */
+router.post("/:id/report", authenticate, async (req, res) => {
+  const challenge = await getChallengeByIdAny(req.params.id);
+  if (!challenge) throw createError("Challenge not found", 404);
+
+  const ReportSchema = z.object({
+    reason: z.enum([
+      "misleading_content",
+      "inappropriate_language",
+      "factually_incorrect",
+      "other",
+    ]),
+    note: z.string().max(500).optional(),
+  });
+
+  const body = ReportSchema.parse(req.body);
+  const userId = req.user!.sub;
+
+  const existing = await query(
+    `SELECT id FROM challenge_reports WHERE challenge_id = $1 AND user_id = $2`,
+    [challenge.id, userId]
+  );
+
+  if (existing.rows.length > 0) {
+    throw createError("You have already reported this challenge", 409, "ALREADY_REPORTED");
+  }
+
+  await query(
+    `INSERT INTO challenge_reports (challenge_id, user_id, reason, note)
+     VALUES ($1, $2, $3, $4)`,
+    [challenge.id, userId, body.reason, body.note ?? null]
+  );
+
+  res.status(201).json({ success: true });
+});
+
 export default router;

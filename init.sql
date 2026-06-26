@@ -405,3 +405,38 @@ CREATE INDEX idx_gdpr_erasure_user_id ON gdpr_erasure_requests (user_id);
 CREATE TRIGGER gdpr_erasure_requests_updated_at
   BEFORE UPDATE ON gdpr_erasure_requests
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHALLENGE REPORTS (user-submitted content flags)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE challenge_reports (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason       TEXT NOT NULL CHECK (reason IN ('misleading_content', 'inappropriate_language', 'factually_incorrect', 'other')),
+  note         TEXT,
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'reviewed', 'dismissed')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (challenge_id, user_id)
+);
+
+CREATE INDEX idx_challenge_reports_challenge_id ON challenge_reports (challenge_id);
+CREATE INDEX idx_challenge_reports_user_id      ON challenge_reports (user_id);
+CREATE INDEX idx_challenge_reports_status       ON challenge_reports (status);
+
+CREATE TRIGGER challenge_reports_updated_at BEFORE UPDATE ON challenge_reports FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- WAITLIST SIGNUPS
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE waitlist_signups (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email        TEXT NOT NULL UNIQUE,
+  email_hash   TEXT NOT NULL,
+  position     SERIAL NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_waitlist_signups_email ON waitlist_signups (email);
+CREATE INDEX idx_waitlist_signups_email_hash ON waitlist_signups (email_hash);

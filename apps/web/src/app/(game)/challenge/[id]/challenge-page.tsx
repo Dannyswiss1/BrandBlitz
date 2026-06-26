@@ -18,6 +18,7 @@ import {
 } from "@/components/game/session-recovery-modal";
 import { scoresForResume, shouldShowRecoveryModal } from "@/components/game/session-recovery";
 import { BrandKitPreview } from "@/components/brand/brand-kit-preview";
+import { ReportModal } from "@/components/game/report-modal";
 
 const WarmupPhase = dynamic(() => import("@/components/game/warmup-phase").then((m) => m.WarmupPhase), {
   loading: () => <div className="min-h-screen flex items-center justify-center">Loading warmup...</div>,
@@ -89,6 +90,7 @@ export function ChallengePage({ params }: Props) {
   const [answerState, setAnswerState] = React.useState<ChallengeAnswerState | null>(null);
   const [recoverySession, setRecoverySession] = React.useState<RecoverySessionResponse | null>(null);
   const [showTooltip, setShowTooltip] = React.useState(false);
+  const [showReportModal, setShowReportModal] = React.useState(false);
 
   const mountedRef = React.useRef(true);
   const currentRoundRef = React.useRef(currentRound);
@@ -445,6 +447,13 @@ export function ChallengePage({ params }: Props) {
 
     return (
       <div className="min-h-screen p-6 pt-16">
+        <button
+          onClick={() => setShowReportModal(true)}
+          className="fixed right-4 top-4 z-40 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] shadow-sm transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          aria-label="Report this challenge"
+        >
+          Report
+        </button>
         {showTooltip && (
           <div
             className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--background)] px-5 py-3 shadow-lg text-sm"
@@ -463,6 +472,11 @@ export function ChallengePage({ params }: Props) {
           </div>
         )}
         <OfflineBanner blocking />
+        <ReportModal
+          challengeId={challengeId}
+          open={showReportModal}
+          onOpenChange={setShowReportModal}
+        />
         <ChallengeRound
           question={question}
           round={currentRound}

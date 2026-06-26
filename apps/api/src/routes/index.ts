@@ -19,6 +19,7 @@ import docsRoutes from "./docs";
 import cspReportRoutes from "./csp-report";
 import legalRoutes from "./legal";
 import metricsRoutes from "./metrics";
+import waitlistRoutes from "./waitlist";
 
 export function registerRoutes(app: Express): void {
   // #143 — interactive OpenAPI 3.1 docs at /docs (Scalar UI) plus
@@ -47,4 +48,5 @@ export function registerRoutes(app: Express): void {
   // (/admin/dlq, /admin/archive/...) do not overlap with them.
   app.use("/admin", adminRoutes);
   app.use("/me/delete-account", deleteAccountRoutes);
+  app.use("/waitlist", waitlistRoutes);
 }

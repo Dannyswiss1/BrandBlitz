@@ -118,8 +118,11 @@ router.get("/profile/:username", apiLimiter, async (req, res) => {
   const user = await getUserPublicProfileByUsername(username);
   if (!user) throw createError("User not found", 404);
 
+  const isOwner = req.user?.sub === user.id;
+
   res.json({
     user: {
+      userId: isOwner ? user.id : undefined,
       displayName: user.display_name,
       username: user.username,
       league: user.league,
@@ -127,6 +130,8 @@ router.get("/profile/:username", apiLimiter, async (req, res) => {
       totalChallenges: user.challenges_played,
       avatarUrl: user.avatar_url,
       streak: user.streak,
+      createdAt: user.created_at,
+      isOwner,
     },
   });
 });
