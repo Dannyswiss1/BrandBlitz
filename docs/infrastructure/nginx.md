@@ -17,7 +17,7 @@ The official nginx image automatically processes any `*.template` file mounted u
 `/etc/nginx/templates/` and writes the rendered output to `/etc/nginx/conf.d/` before
 nginx starts. No custom entrypoint is needed.
 
-```
+```text
 nginx/templates/nginx.prod.conf.template
         │  (mounted as /etc/nginx/templates/default.conf.template)
         │
@@ -27,9 +27,9 @@ nginx/templates/nginx.prod.conf.template
 
 ## Required environment variable
 
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `DOMAIN` | `brandblitz.io` | The public domain — substituted into `server_name` and TLS cert paths |
+| Variable   | Example            | Description                                                       |
+|------------|--------------------|-------------------------------------------------------------------|
+| `DOMAIN`   | `brandblitz.io`    | Public domain — substituted into `server_name` and TLS cert paths |
 
 Set it in your deploy environment or `.env` file. The prod compose passes it through:
 
