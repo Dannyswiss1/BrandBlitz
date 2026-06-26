@@ -14,6 +14,8 @@ import { createError } from "../middleware/error";
 
 const router = Router();
 
+const LEADERBOARD_CACHE_TTL_SEC = 30;
+
 // Keep leaderboard ORDER BY clauses static or selected from this allowlist only.
 // User query params must never be concatenated directly into SQL strings.
 const LeaderboardSortSchema = z.enum(LEADERBOARD_SORTS).default("score");
@@ -166,22 +168,31 @@ router.get("/:challengeId", async (req, res) => {
   const sortBy = parseLeaderboardSort(req.query);
   const { limit, cursor } = CursorQuerySchema.parse(req.query);
 
-  const result = await getLeaderboard(req.params.challengeId, limit, cursor, sortBy);
+  const cacheKey = `leaderboard:${sortBy}:${req.params.challengeId}:${limit}:${cursor ?? ""}`;
 
-  const data = result.sessions.map((s) => ({
-    userId: s.user_id,
-    username: s.username,
-    displayName: s.display_name,
-    league: s.league,
-    avatarUrl: s.avatar_url,
-    totalScore: s.total_score,
-    totalEarned: s.total_earned_usdc,
-  }));
+  const responseBody = await withCoalescing(cacheKey, LEADERBOARD_CACHE_TTL_SEC, async () => {
+    const result = await getLeaderboard(req.params.challengeId, limit, cursor, sortBy);
 
-  res.json({
-    data,
-    nextCursor: result.nextCursor,
+    const mappedSessions = result.sessions.map((s, i) => ({
+      rank: i + 1,
+      userId: s.user_id,
+      username: s.username,
+      displayName: s.display_name,
+      league: s.league,
+      avatarUrl: s.avatar_url,
+      totalScore: s.total_score,
+      totalEarned: s.total_earned_usdc,
+    }));
+
+    return {
+      sessions: mappedSessions,
+      data: mappedSessions,
+      nextCursor: result.nextCursor,
+    };
   });
+
+  res.json(responseBody);
+});
 });
 
 export default router;

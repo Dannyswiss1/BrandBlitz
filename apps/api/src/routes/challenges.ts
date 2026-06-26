@@ -17,11 +17,14 @@ import {
 import { optionalAuth, authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
 import { withCoalescing } from "../lib/cache";
+import { redis } from "../lib/redis";
 import { config } from "../lib/config";
 import { CursorQuerySchema } from "../db/pagination";
 import { query } from "../db/index";
 
 const router = Router();
+
+const CHALLENGES_CACHE_TTL_SEC = 10;
 
 const LeaderboardSortSchema = z.enum(LEADERBOARD_SORTS).default("score");
 
@@ -67,16 +70,16 @@ router.get("/", optionalAuth, async (req, res) => {
     return;
   }
 
-  const cacheKey = cursor
-    ? `challenges:cursor:${cursor}:${limit}`
-    : `challenges:cursor:first:${limit}`;
+  const cacheKey = `challenges:active:global:${cursor ?? 'start'}:${limit}`;
 
+  const cacheHit = await redis.get(cacheKey);
   const result = await withCoalescing(
     cacheKey,
-    60,
+    CHALLENGES_CACHE_TTL_SEC,
     () => getActiveChallengesCursor(cursor, limit)
   );
 
+  res.setHeader("X-Cache", cacheHit !== null ? "HIT" : "MISS");
   res.json({ data: result.challenges, nextCursor: result.nextCursor });
 });
 
