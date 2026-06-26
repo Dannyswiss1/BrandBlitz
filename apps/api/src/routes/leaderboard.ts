@@ -9,7 +9,7 @@ import {
   type LeaderboardSort,
 } from "../db/queries/sessions";
 import { withCoalescing } from "../lib/cache";
-import { redis } from "../lib/redis";
+import { CursorQuerySchema } from "../db/pagination";
 import { createError } from "../middleware/error";
 
 const router = Router();
@@ -62,7 +62,7 @@ router.get("/stream", async (req, res) => {
 
   const sendSnapshot = async () => {
     if (challengeId) {
-      const sessions = await getLeaderboard(challengeId, 100, 0);
+      const { sessions } = await getLeaderboard(challengeId, 100);
       writeSse(res, {
         challengeId,
         sessions: sessions.map((s, i) => ({
@@ -81,7 +81,7 @@ router.get("/stream", async (req, res) => {
       return;
     }
 
-    const challenges = await getActiveChallenges(10);
+    const { challenges } = await getActiveChallenges(10);
     const challengeIds = challenges.map((c) => c.id);
     const topSessions = await getTopSessionsPerChallenge(challengeIds, 10);
 
@@ -130,22 +130,15 @@ router.get("/stream", async (req, res) => {
  */
 router.get("/global", async (req, res) => {
   const sortBy = parseLeaderboardSort(req.query);
-  const { limit, cursor } = z.object({
-    limit: z.coerce.number().min(1).max(100).default(50),
-    cursor: z.string().optional(),
-  }).parse(req.query);
+  const { limit } = CursorQuerySchema.parse(req.query);
 
-  const cacheKey = cursor
-    ? `leaderboard:global:${sortBy}:${cursor}:${limit}`
-    : `leaderboard:global:${sortBy}:first:${limit}`;
-
-  const response = await withCoalescing(cacheKey, 300, async () => {
-    const challenges = await getActiveChallenges(10);
+  const response = await withCoalescing(`leaderboard:global:${sortBy}:${limit}`, 300, async () => {
+    const { challenges } = await getActiveChallenges(10);
     const challengeIds = challenges.map((c) => c.id);
 
     const viewRows = await getGlobalLeaderboardFromView(challengeIds, 10);
 
-    const allSessions = viewRows.map((s) => ({
+    const data = viewRows.map((s) => ({
       rank: s.rank,
       challengeId: s.challenge_id,
       userId: s.user_id,
@@ -157,21 +150,9 @@ router.get("/global", async (req, res) => {
       totalEarned: s.total_earned_usdc,
     }));
 
-    // Apply cursor filter
-    let startIndex = 0;
-    if (cursor) {
-      const cursorIndex = allSessions.findIndex((s) => s.rank > Number(cursor));
-      startIndex = cursorIndex >= 0 ? cursorIndex : allSessions.length;
-    }
-
-    const page = allSessions.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < allSessions.length;
-    const nextCursor = page.length > 0 ? String(page[page.length - 1].rank) : null;
-
     return {
-      leaderboard: page,
-      data: page,
-      nextCursor: hasMore ? nextCursor : null,
+      data,
+      nextCursor: null,
       cachedAt: new Date().toISOString(),
     };
   });
@@ -181,73 +162,37 @@ router.get("/global", async (req, res) => {
 
 /**
  * GET /leaderboard/:challengeId
+ * Paginated leaderboard for a challenge. Supports keyset cursor pagination.
  */
 router.get("/:challengeId", async (req, res) => {
   const sortBy = parseLeaderboardSort(req.query);
-  const { limit, offset, cursor } = z.object({
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-    offset: z.coerce.number().int().min(0).default(0),
-    cursor: z.string().optional(),
-  }).parse(req.query);
+  const { limit, cursor } = CursorQuerySchema.parse(req.query);
 
-  const cacheKey = `leaderboard:${sortBy}:${req.params.challengeId}:${limit}:${offset}`;
+  const cacheKey = `leaderboard:${sortBy}:${req.params.challengeId}:${limit}:${cursor ?? ""}`;
 
-  // Check cache first
-  const cachedValue = await redis.get(cacheKey);
-  if (cachedValue !== null) {
-    res.setHeader("X-Cache", "HIT");
-    res.json(JSON.parse(cachedValue));
-    return;
-  }
+  const responseBody = await withCoalescing(cacheKey, LEADERBOARD_CACHE_TTL_SEC, async () => {
+    const result = await getLeaderboard(req.params.challengeId, limit, cursor, sortBy);
 
-  // cursor is last seen total_score,encoded as just the score value
-  // We fetch limit+1 to detect if there are more
-  let cursorScore: number | undefined;
-  let cursorId: string | undefined;
-  if (cursor) {
-    const parts = cursor.split(":");
-    cursorScore = Number(parts[0]);
-    cursorId = parts[1];
-  }
+    const mappedSessions = result.sessions.map((s, i) => ({
+      rank: i + 1,
+      userId: s.user_id,
+      username: s.username,
+      displayName: s.display_name,
+      league: s.league,
+      avatarUrl: s.avatar_url,
+      totalScore: s.total_score,
+      totalEarned: s.total_earned_usdc,
+    }));
 
-  const sessions = await getLeaderboard(req.params.challengeId, limit + 1, offset, sortBy);
+    return {
+      sessions: mappedSessions,
+      data: mappedSessions,
+      nextCursor: result.nextCursor,
+    };
+  });
 
-  // Apply cursor filter on the result set
-  let filtered = sessions;
-  if (cursorScore !== undefined && cursorId !== undefined) {
-    filtered = sessions.filter(s =>
-      s.total_score < cursorScore! ||
-      (s.total_score === cursorScore && s.id > cursorId!)
-    );
-  }
-
-  const hasMore = filtered.length > limit;
-  const page = filtered.slice(0, limit);
-
-  const lastItem = page[page.length - 1];
-  const nextCursor = lastItem ? `${lastItem.total_score}:${lastItem.id}` : null;
-
-  const mappedSessions = page.map((s, i) => ({
-    rank: offset + i + 1,
-    userId: s.user_id,
-    username: s.username,
-    displayName: s.display_name,
-    league: s.league,
-    avatarUrl: s.avatar_url,
-    totalScore: s.total_score,
-    totalEarned: s.total_earned_usdc,
-    endedAt: s.completed_at,
-  }));
-
-  const responseBody = {
-    sessions: mappedSessions,
-    data: mappedSessions,
-    nextCursor: hasMore ? nextCursor : null,
-  };
-
-  await redis.set(cacheKey, JSON.stringify(responseBody), "EX", LEADERBOARD_CACHE_TTL_SEC);
-  res.setHeader("X-Cache", "MISS");
   res.json(responseBody);
+});
 });
 
 export default router;

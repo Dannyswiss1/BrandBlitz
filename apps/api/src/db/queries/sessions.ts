@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool, query } from "../index";
+import { encodeCursor, buildCursorWhereSimple, decodeCursorSafe } from "../pagination";
 
 export interface GameSession {
   id: string;
@@ -283,10 +284,27 @@ export async function markAbandonedSessions(): Promise<number> {
 export async function getLeaderboard(
   challengeId: string,
   limit = 20,
-  offset = 0,
+  cursor?: string,
   sortBy: LeaderboardSort = "score"
-): Promise<LeaderboardSession[]> {
+): Promise<{ sessions: LeaderboardSession[]; nextCursor: string | null }> {
   const orderBy = leaderboardOrderBy[sortBy];
+  const cursorValues = decodeCursorSafe(cursor, ["total_score", "completed_at", "id"]);
+  const scoreDir = sortBy === "score" ? "DESC" : "ASC";
+  const scoreOp = sortBy === "score" ? "<" : ">";
+
+  let whereExtra = "";
+  const params: unknown[] = [challengeId];
+
+  if (cursorValues) {
+    const score = cursorValues.total_score;
+    const completedAt = cursorValues.completed_at;
+    const id = cursorValues.id as string;
+    whereExtra = `AND (gs.total_score ${scoreOp} $${params.length + 1} OR (gs.total_score = $${params.length + 1} AND (gs.completed_at > $${params.length + 2} OR (gs.completed_at = $${params.length + 2} AND gs.id > $${params.length + 3}))))`;
+    params.push(score, completedAt, id);
+  }
+
+  params.push(limit);
+
   const result = await query<LeaderboardSession>(
     `SELECT gs.*,
             u.email AS username,
@@ -305,11 +323,23 @@ export async function getLeaderboard(
        AND gs.is_practice = FALSE
        AND gs.status = 'completed'
        AND u.deleted_at IS NULL
-     ORDER BY ${orderBy}
-     LIMIT $2 OFFSET $3`,
-    [challengeId, limit, offset]
+     ${whereExtra}
+     ORDER BY ${orderBy}, gs.id ASC
+     LIMIT $${params.length}`,
+    params,
   );
-  return result.rows;
+
+  const sessions = result.rows;
+  const nextCursor: string | null =
+    sessions.length === limit
+      ? encodeCursor({
+          total_score: sessions[sessions.length - 1].total_score,
+          completed_at: sessions[sessions.length - 1].completed_at,
+          id: sessions[sessions.length - 1].id,
+        })
+      : null;
+
+  return { sessions, nextCursor };
 }
 
 export async function getTopSessionsPerChallenge(
@@ -385,8 +415,23 @@ export async function getGlobalLeaderboardFromView(
 export async function getArchivedLeaderboard(
   challengeId: string,
   limit = 20,
-  offset = 0
-): Promise<Array<GameSession & { username: string; avatar_url: string }>> {
+  cursor?: string,
+): Promise<{ sessions: Array<GameSession & { username: string; avatar_url: string }>; nextCursor: string | null }> {
+  const cursorValues = decodeCursorSafe(cursor, ["total_score", "challenge_ended_at", "id"]);
+
+  let whereExtra = "";
+  const params: unknown[] = [challengeId];
+
+  if (cursorValues) {
+    const score = cursorValues.total_score;
+    const endedAt = cursorValues.challenge_ended_at;
+    const id = cursorValues.id as string;
+    whereExtra = `AND (gs.total_score < $${params.length + 1} OR (gs.total_score = $${params.length + 1} AND (gs.challenge_ended_at > $${params.length + 2} OR (gs.challenge_ended_at = $${params.length + 2} AND gs.id > $${params.length + 3}))))`;
+    params.push(score, endedAt, id);
+  }
+
+  params.push(limit);
+
   const result = await query<GameSession & { username: string; avatar_url: string }>(
     `SELECT gs.*, u.email as username, u.avatar_url
      FROM game_sessions_archive gs
@@ -396,9 +441,21 @@ export async function getArchivedLeaderboard(
        AND gs.is_practice = FALSE
        AND gs.status = 'completed'
        AND u.deleted_at IS NULL
-     ORDER BY gs.total_score DESC, gs.challenge_ended_at ASC
-     LIMIT $2 OFFSET $3`,
-    [challengeId, limit, offset]
+     ${whereExtra}
+     ORDER BY gs.total_score DESC, gs.challenge_ended_at ASC, gs.id ASC
+     LIMIT $${params.length}`,
+    params,
   );
-  return result.rows;
+
+  const sessions = result.rows;
+  const nextCursor: string | null =
+    sessions.length === limit
+      ? encodeCursor({
+          total_score: sessions[sessions.length - 1].total_score,
+          challenge_ended_at: sessions[sessions.length - 1].challenge_ended_at,
+          id: sessions[sessions.length - 1].id,
+        })
+      : null;
+
+  return { sessions, nextCursor };
 }

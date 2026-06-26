@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import sharp from "sharp";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
-import { s3, BUCKETS, uploadObject } from "./client";
+import { s3, BUCKETS, getPublicUrl, uploadObject } from "./client";
 
 type ImageType = "brand-logo" | "product-image" | "user-avatar";
 
@@ -56,7 +56,10 @@ export async function optimizeImage(key: string, type: ImageType): Promise<strin
     return key;
   }
 
-  const optimized = await sharp(buffer)
+  const hash = createHash("sha256").update(buffer).digest("hex").slice(0, 8);
+  const base = key.replace(/\.[^.]+$/, "");
+
+  const webpBuffer = await sharp(buffer)
     .resize(spec.width, spec.height, {
       fit: spec.fit,
       background: { r: 255, g: 255, b: 255, alpha: 0 },
@@ -64,19 +67,31 @@ export async function optimizeImage(key: string, type: ImageType): Promise<strin
     .webp({ quality: 85 })
     .toBuffer();
 
-  // Embed an 8-hex-char content hash so the URL is stable for identical content
-  // and safe to serve with `Cache-Control: immutable`.
-  const hash = createHash("sha256").update(optimized).digest("hex").slice(0, 8);
-  const base = key.replace(/\.[^.]+$/, "");
-  const optimizedKey = `${base}-${hash}.webp`;
-
+  const webpKey = `${base}-${hash}.webp`;
   await uploadObject({
     bucket: BUCKETS.BRAND_ASSETS,
-    key: optimizedKey,
-    body: optimized,
+    key: webpKey,
+    body: webpBuffer,
     contentType: "image/webp",
     immutable: true,
   });
 
-  return optimizedKey;
+  const avifBuffer = await sharp(buffer)
+    .resize(spec.width, spec.height, {
+      fit: spec.fit,
+      background: { r: 255, g: 255, b: 255, alpha: 0 },
+    })
+    .avif({ quality: 75 })
+    .toBuffer();
+
+  const avifKey = `${base}-${hash}.avif`;
+  await uploadObject({
+    bucket: BUCKETS.BRAND_ASSETS,
+    key: avifKey,
+    body: avifBuffer,
+    contentType: "image/avif",
+    immutable: true,
+  });
+
+  return webpKey;
 }

@@ -2,13 +2,14 @@
 
 ## Overview
 
-BrandBlitz uses the official `nginx:1.25-alpine` image. In production the config is
-generated from a template so that shell variables (e.g. `${DOMAIN}`) are substituted
-at container start rather than baked in at build time.
+BrandBlitz builds a custom nginx image via `nginx/Dockerfile` that includes the
+`ngx_brotli` dynamic module. Both gzip and brotli compression are enabled at the
+http level for JSON API responses and static assets. Compression levels are tuned
+for CPU efficiency (gzip level 5, brotli level 4).
 
-Response compression is handled in the API process with Express middleware, so
-this nginx config intentionally does not add a second gzip or brotli layer. That
-keeps `Vary: Accept-Encoding` correct without double-compressing JSON payloads.
+In production the config is generated from a template so that shell variables
+(e.g. `${DOMAIN}`) are substituted at container start rather than baked in at
+build time.
 
 ## How envsubst works
 
@@ -16,7 +17,7 @@ The official nginx image automatically processes any `*.template` file mounted u
 `/etc/nginx/templates/` and writes the rendered output to `/etc/nginx/conf.d/` before
 nginx starts. No custom entrypoint is needed.
 
-```
+```text
 nginx/templates/nginx.prod.conf.template
         │  (mounted as /etc/nginx/templates/default.conf.template)
         │
@@ -26,9 +27,9 @@ nginx/templates/nginx.prod.conf.template
 
 ## Required environment variable
 
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `DOMAIN` | `brandblitz.io` | The public domain — substituted into `server_name` and TLS cert paths |
+| Variable   | Example            | Description                                                       |
+|------------|--------------------|-------------------------------------------------------------------|
+| `DOMAIN`   | `brandblitz.io`    | Public domain — substituted into `server_name` and TLS cert paths |
 
 Set it in your deploy environment or `.env` file. The prod compose passes it through:
 

@@ -16,6 +16,7 @@ import {
 } from "../../db/queries/gdpr";
 import { enqueueGdprErasure } from "../../queues/gdpr-erasure.queue";
 import { query } from "../../db/index";
+import { CursorQuerySchema } from "../../db/pagination";
 
 const router = Router();
 
@@ -28,22 +29,23 @@ const SuspendBodySchema = z.object({
   reason: z.string().min(1, "Suspension reason is required").max(500),
 }).strict();
 
-const ListUsersQuerySchema = z.object({
+const ListUsersQuerySchema = CursorQuerySchema.extend({
   status: z.enum(["active", "suspended"]).optional(),
   search: z.string().optional(),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+}).refine((data) => !("page" in data), {
+  message: "Use ?cursor for pagination. Legacy ?page parameter is no longer supported.",
 });
 
 // ── List users ───────────────────────────────────────────────────────────────
 
 /**
  * GET /admin/users
- * Paginated list of users. Optional ?status=suspended&search= filters.
+ * Paginated list of users. Supports keyset cursor pagination via ?cursor.
+ * Optional ?status=suspended&search= filters.
  */
 router.get("/", async (req, res) => {
-  const { status, search, page, pageSize } = ListUsersQuerySchema.parse(req.query);
-  const { users, total } = await listUsers({ status, search, page, pageSize });
+  const { status, search, cursor, limit: pageSize } = ListUsersQuerySchema.parse(req.query);
+  const { users, total, nextCursor } = await listUsers({ status, search, cursor, pageSize });
 
   res.json({
     users: users.map((u) => ({
@@ -59,10 +61,9 @@ router.get("/", async (req, res) => {
       createdAt: u.created_at,
     })),
     pagination: {
-      page,
       pageSize,
       total,
-      totalPages: Math.ceil(total / pageSize),
+      nextCursor,
     },
   });
 });
