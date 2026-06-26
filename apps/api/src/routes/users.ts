@@ -9,9 +9,10 @@ import {
   updateUserProfile,
   getUserPublicProfileByUsername,
 } from "../db/queries/users";
-import { getReferralStats } from "../services/referrals";
+import { getReferralStats, ensureUserReferralCode } from "../services/referrals";
 import { stroopsToUsdc } from "../lib/usdc";
 import { getStreak, repairStreak, getUserActivity } from "../services/streaks";
+import { query } from "../db";
 import {
   sendVerificationCode,
   hashPhoneNumber,
@@ -88,6 +89,64 @@ router.get("/me/referrals/stats", authenticate, async (req, res) => {
     conversions: stats.conversions,
     totalEarned: stroopsToUsdc(stats.totalEarnedStroops),
     totalEarnedUsdc: stroopsToUsdc(stats.totalEarnedStroops),
+  });
+});
+
+router.get("/me/referrals", authenticate, async (req, res) => {
+  const userId = req.user!.sub;
+  const referralCode = await ensureUserReferralCode(userId);
+
+  const referredResult = await query<{
+    id: string;
+    username: string;
+    display_name: string;
+    avatar_url: string | null;
+    created_at: string;
+    paid: boolean;
+  }>(
+    `SELECT
+       u.id,
+       u.username,
+       u.display_name,
+       u.avatar_url,
+       u.created_at,
+       COALESCE(rp.status = 'sent', FALSE) AS paid
+     FROM referrals r
+     JOIN users u ON r.referred_id = u.id
+     LEFT JOIN referral_payouts rp ON r.id = rp.referral_id AND rp.status = 'sent'
+     WHERE r.referrer_id = $1 AND u.deleted_at IS NULL
+     ORDER BY u.created_at DESC`,
+    [userId]
+  );
+
+  const totalsResult = await query<{
+    pending_stroops: string;
+    confirmed_stroops: string;
+  }>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN referrer_id = $1 AND status = 'pending' THEN referrer_amount_stroops ELSE 0 END), 0)::text AS pending_stroops,
+       COALESCE(SUM(CASE WHEN referrer_id = $1 AND status = 'sent' THEN referrer_amount_stroops ELSE 0 END), 0)::text AS confirmed_stroops
+     FROM referral_payouts
+     WHERE referrer_id = $1`,
+    [userId]
+  );
+
+  const totals = totalsResult.rows[0] || { pending_stroops: "0", confirmed_stroops: "0" };
+
+  res.json({
+    referralCode,
+    referredUsers: referredResult.rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url,
+      joinedAt: row.created_at,
+      bonusPaid: row.paid,
+    })),
+    bonusStatus: {
+      pendingUsdc: stroopsToUsdc(BigInt(totals.pending_stroops)),
+      confirmedUsdc: stroopsToUsdc(BigInt(totals.confirmed_stroops)),
+    },
   });
 });
 
