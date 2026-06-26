@@ -11,7 +11,7 @@ import {
 } from "../db/queries/users";
 import { getReferralStats } from "../services/referrals";
 import { stroopsToUsdc } from "../lib/usdc";
-import { getStreak, repairStreak } from "../services/streaks";
+import { getStreak, repairStreak, getUserActivity } from "../services/streaks";
 import {
   sendVerificationCode,
   hashPhoneNumber,
@@ -147,6 +147,21 @@ router.get("/:id/badges", authenticate, async (req, res) => {
 
   const badges = await getBadgesForUser(id);
   res.json({ badges });
+});
+
+/**
+ * GET /users/:username/activity
+ * Returns 365 days of activity (date and session_count) for the trailing year.
+ * Public endpoint - no authentication required.
+ */
+router.get("/:username/activity", apiLimiter, async (req, res) => {
+  const { username } = z.object({ username: z.string() }).parse(req.params);
+
+  const user = await getUserPublicProfileByUsername(username);
+  if (!user) throw createError("User not found", 404);
+
+  const activity = await getUserActivity(user.id);
+  res.json(activity);
 });
 
 /**

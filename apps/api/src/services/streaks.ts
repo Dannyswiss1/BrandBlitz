@@ -1,4 +1,5 @@
 import { metrics } from "../lib/metrics";
+import { query } from "../db";
 import {
   getUserStreak,
   repairUserStreak,
@@ -88,4 +89,51 @@ function dayDiff(from: string, to: string): number {
   const fromMs = Date.parse(`${from}T00:00:00.000Z`);
   const toMs = Date.parse(`${to}T00:00:00.000Z`);
   return Math.round((toMs - fromMs) / 86_400_000);
+}
+
+export interface ActivityRecord {
+  date: string;
+  session_count: number;
+}
+
+export async function getUserActivity(userId: string, now = new Date()): Promise<ActivityRecord[]> {
+  const endDate = toUtcDay(now);
+  const startDate = new Date(now);
+  startDate.setDate(startDate.getDate() - 364);
+  const startDateStr = toUtcDay(startDate);
+
+  const result = await query<ActivityRecord>(
+    `SELECT
+       DATE(gs.completed_at) AS date,
+       COUNT(*)::int AS session_count
+     FROM game_sessions gs
+     WHERE gs.user_id = $1
+       AND gs.status = 'completed'
+       AND DATE(gs.completed_at) >= $2::date
+       AND DATE(gs.completed_at) <= $3::date
+     GROUP BY DATE(gs.completed_at)
+     ORDER BY date`,
+    [userId, startDateStr, endDate]
+  );
+
+  const activityMap = new Map<string, number>();
+  result.rows.forEach((row) => {
+    activityMap.set(row.date, row.session_count);
+  });
+
+  const activity: ActivityRecord[] = [];
+  const current = new Date(startDateStr);
+  const end = new Date(endDate);
+  end.setDate(end.getDate() + 1);
+
+  while (current < end) {
+    const dateStr = toUtcDay(current);
+    activity.push({
+      date: dateStr,
+      session_count: activityMap.get(dateStr) ?? 0,
+    });
+    current.setDate(current.getDate() + 1);
+  }
+
+  return activity;
 }

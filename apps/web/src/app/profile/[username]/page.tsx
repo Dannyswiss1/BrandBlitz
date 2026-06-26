@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatScore, formatUsdc, safeDivide } from "@/lib/format";
 import { StreakBadge } from "@/components/gamification/streak-badge";
+import { StreakHeatmap } from "@/components/gamification/StreakHeatmap";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -87,6 +88,16 @@ async function getUserBadges(userId: string): Promise<UserBadge[]> {
   }
 }
 
+async function getUserActivity(username: string) {
+  try {
+    const res = await fetch(`${API_URL}/users/${username}/activity`);
+    if (!res.ok) throw new Error("Failed to fetch");
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
   return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -127,6 +138,7 @@ export default async function ProfilePage({ params }: ProfilePageProps) {
 
   const badges = user.userId ? await getUserBadges(user.userId) : [];
   const earnedIds = badges.filter((b) => b.earned).map((b) => b.id);
+  const activity = await getUserActivity(username);
 
   const streak = user.streak ?? 0;
   const recentSessions = user.recentSessions ?? [];
@@ -254,6 +266,18 @@ export default async function ProfilePage({ params }: ProfilePageProps) {
           </CardHeader>
           <CardContent>
             <BadgeGrid badges={badges} previouslyEarned={earnedIds} />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Activity heatmap */}
+      {activity.length > 0 && (
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle>Activity</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <StreakHeatmap activity={activity} />
           </CardContent>
         </Card>
       )}
