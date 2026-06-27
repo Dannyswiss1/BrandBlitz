@@ -34,6 +34,10 @@ CREATE TABLE users (
   streak_repairs_this_month INTEGER NOT NULL DEFAULT 0,
   streak_repair_available BOOLEAN NOT NULL DEFAULT FALSE,
   role              TEXT NOT NULL DEFAULT 'player' CHECK (role IN ('player', 'brand', 'admin')),
+  status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+  suspension_reason TEXT,
+  suspended_at      TIMESTAMPTZ,
+  suspended_by      UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -43,6 +47,7 @@ CREATE INDEX idx_users_google_id    ON users (google_id);
 CREATE INDEX idx_users_phone_hash   ON users (phone_hash);
 CREATE INDEX idx_users_total_score  ON users (total_score DESC);
 CREATE INDEX idx_users_league       ON users (league);
+CREATE INDEX idx_users_status       ON users (status);
 -- ─────────────────────────────────────────────────────────────────────────────
 -- BRANDS
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -92,11 +97,12 @@ CREATE TABLE challenges (
   )
 );
 
-CREATE INDEX idx_challenges_brand_id      ON challenges (brand_id);
-CREATE INDEX idx_challenges_status        ON challenges (status);
-CREATE INDEX idx_challenges_ends_at       ON challenges (ends_at);
-CREATE INDEX idx_challenges_challenge_id  ON challenges (challenge_id);
-CREATE INDEX idx_challenges_deposit_memo  ON challenges (deposit_memo);
+CREATE INDEX idx_challenges_brand_id        ON challenges (brand_id);
+CREATE INDEX idx_challenges_status          ON challenges (status);
+CREATE INDEX idx_challenges_active_status   ON challenges (status) WHERE status = 'active';
+CREATE INDEX idx_challenges_ends_at         ON challenges (ends_at);
+CREATE INDEX idx_challenges_challenge_id    ON challenges (challenge_id);
+CREATE INDEX idx_challenges_deposit_memo    ON challenges (deposit_memo);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- CHALLENGE QUESTIONS (3 per challenge, server-side only)
@@ -268,7 +274,8 @@ CREATE TABLE league_assignments (
   UNIQUE (user_id, week_start)
 );
 
-CREATE INDEX idx_league_assignments_week ON league_assignments (week_start, league, group_id, weekly_points DESC);
+CREATE INDEX idx_league_assignments_week        ON league_assignments (week_start, league, group_id, weekly_points DESC);
+CREATE INDEX idx_league_assignments_week_league ON league_assignments (week_start, league);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- USER BADGES
