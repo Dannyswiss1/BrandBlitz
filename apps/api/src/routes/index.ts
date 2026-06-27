@@ -14,6 +14,8 @@ import adminFraudRoutes from "./admin/fraud";
 import adminChallengesRoutes from "./admin/challenges";
 import adminEscrowRoutes from "./admin/escrow";
 import adminAuditLogRoutes from "./admin/audit-log";
+import adminPayoutsRoutes from "./admin/payouts";
+import adminStatsRoutes from "./admin/stats";
 import adminRoutes from "./admin";
 import deleteAccountRoutes from "./me/delete-account";
 import docsRoutes from "./docs";
@@ -45,6 +47,8 @@ export function registerRoutes(app: Express): void {
   app.use("/admin/challenges", adminChallengesRoutes);
   app.use("/admin/escrow", adminEscrowRoutes);
   app.use("/admin/audit-log", adminAuditLogRoutes);
+  app.use("/admin/payouts", adminPayoutsRoutes);
+  app.use("/admin/stats", adminStatsRoutes);
   // General admin endpoints (archive inspection, dead-letter queue triage).
   // Mounted after the more specific /admin/* routers; its own routes
   // (/admin/dlq, /admin/archive/...) do not overlap with them.

@@ -347,6 +347,28 @@ export async function getChallengeQuestions(challengeId: string): Promise<Challe
   return result.rows;
 }
 
+export async function deleteChallengeQuestion(questionId: string): Promise<void> {
+  await query("DELETE FROM challenge_questions WHERE id = $1", [questionId]);
+}
+
+export async function insertChallengeQuestion(
+  question: Omit<ChallengeQuestion, "id">
+): Promise<ChallengeQuestion> {
+  const result = await query<ChallengeQuestion>(
+    `INSERT INTO challenge_questions
+       (challenge_id, round, question_type, prompt_type, question_text,
+        correct_answer, option_a, option_b, option_c, option_d, correct_option)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     RETURNING *`,
+    [
+      question.challenge_id, question.round, question.question_type, question.prompt_type,
+      question.question_text, question.correct_answer,
+      question.option_a, question.option_b, question.option_c, question.option_d, question.correct_option,
+    ]
+  );
+  return result.rows[0];
+}
+
 /**
  * Increment deposit confirmations for a challenge.
  * Returns the updated confirmation count.

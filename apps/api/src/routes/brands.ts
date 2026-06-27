@@ -16,6 +16,10 @@ import { getBrandAnalytics } from "../db/queries/analytics";
 import {
   createChallenge,
   insertChallengeQuestions,
+  getChallengeQuestions,
+  getChallengesByBrandId,
+  deleteChallengeQuestion,
+  insertChallengeQuestion,
 } from "../db/queries/challenges";
 import { generateChallengeQuestions } from "../services/questions";
 import { optimizeImage, StorageError } from "@brandblitz/storage";
@@ -26,6 +30,7 @@ import { logger } from "../lib/logger";
 import { config } from "../lib/config";
 import { MIN_POOL_STROOPS } from "@brandblitz/stellar";
 import { query } from "../db/index";
+import { sanitizeSvgText } from "../lib/svg-sanitize";
 
 const router = Router();
 
@@ -194,6 +199,86 @@ router.get("/:id/dashboard", authenticate, async (req, res) => {
 });
 
 /**
+ * GET /brands/:id/questions/preview
+ * Returns questions (with correct answers) for the latest challenge of a brand.
+ * Accessible only to the brand owner for previewing before launch.
+ */
+router.get("/:id/questions/preview", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { challenges } = await getChallengesByBrandId(brand.id, 1);
+  if (challenges.length === 0) {
+    res.json({ questions: [], challenge: null });
+    return;
+  }
+
+  const challenge = challenges[0];
+  const questions = await getChallengeQuestions(challenge.id);
+  res.json({ questions, challenge });
+});
+
+/**
+ * POST /brands/:id/questions/:questionId/regenerate
+ * Delete a question and regenerate it for the same round.
+ * Returns the new question with correct_answer.
+ */
+router.post("/:id/questions/:questionId/regenerate", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { questionId } = req.params;
+  const allQuestions = await query<{ id: string; challenge_id: string; round: 1 | 2 | 3 }>(
+    "SELECT id, challenge_id, round FROM challenge_questions WHERE id = $1",
+    [questionId]
+  );
+  const existing = allQuestions.rows[0];
+  if (!existing) throw createError("Question not found", 404);
+
+  const challenge = await getBrandById(brand.id);
+  if (!challenge) throw createError("Brand not found", 404);
+
+  const distractorBrands = await getActiveDistractorBrands(brand.id);
+  const regenerated = generateChallengeQuestions(existing.challenge_id, brand, distractorBrands);
+  const newDraft = regenerated.find((q) => q.round === existing.round) ?? regenerated[0];
+
+  await deleteChallengeQuestion(questionId);
+  const inserted = await insertChallengeQuestion({ ...newDraft, challenge_id: existing.challenge_id });
+
+  res.json({ question: inserted });
+});
+
+/**
+ * POST /brands/:id/questions/:questionId/approve
+ * Mark a question as approved.
+ */
+router.post("/:id/questions/:questionId/approve", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { questionId } = req.params;
+  await query("UPDATE challenge_questions SET approved = true WHERE id = $1", [questionId]);
+  res.json({ success: true });
+});
+
+/**
+ * POST /brands/:id/questions/:questionId/flag
+ * Mark a question as flagged for regeneration.
+ */
+router.post("/:id/questions/:questionId/flag", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { questionId } = req.params;
+  await query("UPDATE challenge_questions SET approved = false WHERE id = $1", [questionId]);
+  res.json({ success: true });
+});
+
+/**
  * POST /brands
  * Create a brand kit. Optimizes uploaded images immediately.
  */
@@ -229,11 +314,11 @@ router.post("/", authenticate, async (req, res) => {
 
   const brand = await createBrand({
     owner_user_id: userId,
-    name: body.name,
+    name: sanitizeSvgText(body.name),
     logo_url: logoUrl ?? null,
     primary_color: body.primaryColor ?? null,
     secondary_color: body.secondaryColor ?? null,
-    tagline: body.tagline ?? null,
+    tagline: body.tagline ? sanitizeSvgText(body.tagline) : null,
     brand_story: body.brandStory ?? null,
     usp: body.usp ?? null,
     product_image_keys: productImageKeys,
