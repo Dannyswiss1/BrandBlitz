@@ -337,4 +337,62 @@ router.post("/me/phone/verify", authenticate, async (req, res) => {
   res.json({ success: true });
 });
 
+/**
+ * GET /users/me/notifications
+ * Returns the 50 most recent unread notifications for the authenticated user.
+ */
+router.get("/me/notifications", authenticate, async (req, res) => {
+  const result = await query<{
+    id: string;
+    type: string;
+    payload: Record<string, unknown>;
+    read_at: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, type, payload, read_at, created_at
+     FROM notifications
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT 50`,
+    [req.user!.sub]
+  );
+
+  res.json({ notifications: result.rows });
+});
+
+/**
+ * PATCH /users/me/notifications/:id/read
+ * Marks a single notification as read.
+ */
+router.patch("/me/notifications/:id/read", authenticate, async (req, res) => {
+  const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+
+  const result = await query<{ id: string }>(
+    `UPDATE notifications
+     SET read_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND read_at IS NULL
+     RETURNING id`,
+    [id, req.user!.sub]
+  );
+
+  if (result.rows.length === 0) {
+    throw createError("Notification not found", 404);
+  }
+
+  res.json({ success: true });
+});
+
+/**
+ * PATCH /users/me/notifications/read-all
+ * Marks all unread notifications as read.
+ */
+router.patch("/me/notifications/read-all", authenticate, async (req, res) => {
+  await query(
+    `UPDATE notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL`,
+    [req.user!.sub]
+  );
+
+  res.json({ success: true });
+});
+
 export default router;

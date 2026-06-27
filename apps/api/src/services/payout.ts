@@ -28,6 +28,26 @@ import { query } from "../db";
 // Sentinel included in the PG trigger exception message (migration 018).
 export const FRAUD_BLOCK_SENTINEL = "FRAUD_BLOCKED_PAYOUT";
 
+async function insertPayoutNotification(
+  userId: string,
+  amountUsdc: string,
+  txHash: string | null | undefined,
+  challengeId: string,
+): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO notifications (user_id, type, payload)
+       VALUES ($1, 'payout_received', $2::jsonb)`,
+      [
+        userId,
+        JSON.stringify({ amount_usdc: amountUsdc, tx_hash: txHash ?? null, challenge_id: challengeId }),
+      ],
+    );
+  } catch (err) {
+    logger.warn("Failed to insert payout notification", { userId, err });
+  }
+}
+
 export function isFraudBlockError(err: unknown): boolean {
   return err instanceof Error && err.message.includes(FRAUD_BLOCK_SENTINEL);
 }
@@ -200,6 +220,7 @@ export async function processPayout(challengeId: string): Promise<void> {
           challengeId,
           referralWinAmountStroops: record.amountStroops,
         });
+        await insertPayoutNotification(record.userId, record.amount, txHash, challengeId);
       }
 
       await updateChallengeStatus(challengeId, "settled", { payoutTxHashes: [txHash] });
@@ -268,6 +289,7 @@ export async function processPayout(challengeId: string): Promise<void> {
       await updatePayoutStatus(record.id, status, result.txHash || undefined, errorMessage);
       if (result.success) {
         await incrementUserEarnings(record.userId, record.amount);
+        await insertPayoutNotification(record.userId, record.amount, result.txHash, challengeId);
       }
     }
 

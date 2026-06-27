@@ -1,5 +1,6 @@
 import { metrics } from "../lib/metrics";
 import { query } from "../db";
+import { logger } from "../lib/logger";
 import {
   getUserStreak,
   repairUserStreak,
@@ -8,6 +9,7 @@ import {
 } from "../db/queries/users";
 
 const STREAK_MILESTONES = [3, 7, 14, 30] as const;
+const NOTIFICATION_MILESTONES = new Set([7, 30, 100]);
 
 export interface StreakResponse {
   streak: number;
@@ -40,6 +42,10 @@ export async function updateStreak(userId: string, now = new Date()): Promise<St
 
   if (STREAK_MILESTONES.includes(newStreak as any)) {
     metrics.inc("streaks.milestones_reached_total", { milestone: String(newStreak) });
+  }
+
+  if (NOTIFICATION_MILESTONES.has(newStreak)) {
+    await insertStreakMilestoneNotification(userId, newStreak);
   }
 
   return updated;
@@ -91,6 +97,18 @@ function dayDiff(from: string, to: string): number {
   return Math.round((toMs - fromMs) / 86_400_000);
 }
 
+async function insertStreakMilestoneNotification(userId: string, milestone: number): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO notifications (user_id, type, payload)
+       VALUES ($1, 'streak_milestone', $2::jsonb)`,
+      [userId, JSON.stringify({ milestone })],
+    );
+  } catch (err) {
+    logger.warn("Failed to insert streak milestone notification", { userId, milestone, err });
+  }
+}
+
 export interface ActivityRecord {
   date: string;
   session_count: number;
@@ -117,7 +135,7 @@ export async function getUserActivity(userId: string, now = new Date()): Promise
   );
 
   const activityMap = new Map<string, number>();
-  result.rows.forEach((row) => {
+  result.rows.forEach((row: ActivityRecord) => {
     activityMap.set(row.date, row.session_count);
   });
 

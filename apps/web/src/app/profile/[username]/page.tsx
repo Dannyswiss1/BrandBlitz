@@ -177,11 +177,18 @@ export default async function ProfilePage({ params }: ProfilePageProps) {
           )}
         </div>
         {user.isOwner && (
-          <Link href="/settings/profile">
-            <Button variant="outline" size="sm">
-              Edit Profile
-            </Button>
-          </Link>
+          <div className="flex gap-2">
+            <Link href={`/profile/${user.username}/earnings`}>
+              <Button variant="outline" size="sm">
+                Earnings
+              </Button>
+            </Link>
+            <Link href="/settings/profile">
+              <Button variant="outline" size="sm">
+                Edit Profile
+              </Button>
+            </Link>
+          </div>
         )}
       </div>
 
