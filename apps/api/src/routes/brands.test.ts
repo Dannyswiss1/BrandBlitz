@@ -274,6 +274,40 @@ describe("Brands Routes Integration", () => {
     });
   });
 
+  describe("SVG sanitization", () => {
+    it("escapes XML entities in brand name before storage", async () => {
+      const payload = {
+        name: 'Ben & Jerry\'s <Brand>"',
+        tagline: "The <best> & most \"trusted\" brand",
+      };
+
+      const res = await request(app)
+        .post("/brands")
+        .set("Authorization", `Bearer ${testUser.token}`)
+        .send(payload);
+
+      expect(res.status).toBe(201);
+      expect(res.body.brand.name).toBe("Ben &amp; Jerry&apos;s &lt;Brand&gt;&quot;");
+      expect(res.body.brand.tagline).toBe("The &lt;best&gt; &amp; most &quot;trusted&quot; brand");
+    });
+
+    it("preserves plain text without XML entities", async () => {
+      const payload = {
+        name: "Acme Corp",
+        tagline: "Simply the best",
+      };
+
+      const res = await request(app)
+        .post("/brands")
+        .set("Authorization", `Bearer ${testUser.token}`)
+        .send(payload);
+
+      expect(res.status).toBe(201);
+      expect(res.body.brand.name).toBe("Acme Corp");
+      expect(res.body.brand.tagline).toBe("Simply the best");
+    });
+  });
+
   describe("Unauthenticated access", () => {
     it("returns 401 for GET /brands", async () => {
       const res = await request(app).get("/brands");

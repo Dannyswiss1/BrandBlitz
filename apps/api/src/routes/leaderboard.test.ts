@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import leaderboardRouter from "./leaderboard";
+import { errorHandler } from "../middleware/error";
 
 // ─── Hoisted mocks ────────────────────────────────────────────────────────────
 
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   redisGet: vi.fn(),
   redisSet: vi.fn(),
   redisDel: vi.fn(),
+  redisExists: vi.fn(),
   dbQueryCount: { value: 0 },
 }));
 
@@ -21,6 +23,7 @@ vi.mock("../db/queries/challenges", () => ({
 }));
 
 vi.mock("../db/queries/sessions", () => ({
+  LEADERBOARD_SORTS: ["score", "rank", "created_at"],
   getLeaderboard: (...args: unknown[]) => {
     mocks.dbQueryCount.value++;
     return mocks.getLeaderboard(...args);
@@ -40,6 +43,7 @@ vi.mock("../lib/redis", () => ({
     get: mocks.redisGet,
     set: mocks.redisSet,
     del: mocks.redisDel,
+    exists: mocks.redisExists,
   },
 }));
 
@@ -49,6 +53,7 @@ function createApp() {
   const app = express();
   app.use(express.json());
   app.use("/leaderboard", leaderboardRouter);
+  app.use(errorHandler);
   return app;
 }
 
@@ -105,14 +110,34 @@ describe("GET /leaderboard/global", () => {
     mocks.redisGet.mockResolvedValue(null);
     mocks.redisSet.mockResolvedValue("OK");
     mocks.redisDel.mockResolvedValue(1);
+    mocks.redisExists.mockResolvedValue(0);
     mocks.getActiveChallenges.mockResolvedValue(CHALLENGES);
     mocks.getGlobalLeaderboardFromView.mockResolvedValue(VIEW_ROWS);
   });
 
   it("returns 200 with a leaderboard array", async () => {
-    const res = await request(createApp()).get("/leaderboard/global");
+    const res = await request(createApp()).get("/leaderboard/global?sort_by=score");
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.leaderboard)).toBe(true);
+  });
+
+  it("rejects invalid sort values", async () => {
+    const res = await request(createApp()).get("/leaderboard/global?sort_by=total_score");
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: "Invalid leaderboard sort. Allowed values: score, rank, created_at",
+      code: "INVALID_SORT",
+    });
+  });
+
+  it("rejects SQL injection probes in sort_by", async () => {
+    const res = await request(createApp()).get(
+      "/leaderboard/global?sort_by=score%3B%20DROP%20TABLE%20users--"
+    );
+
+    expect(res.status).toBe(400);
+    expect(mocks.getGlobalLeaderboardFromView).not.toHaveBeenCalled();
   });
 
   it("cache fallback path reads from the materialised view, not the raw tables", async () => {
@@ -169,6 +194,7 @@ describe("GET /leaderboard/global", () => {
   it("returns the cached payload without hitting the DB on a cache hit", async () => {
     const cachedPayload = {
       leaderboard: [{ rank: 1, challengeId: "challenge-aaa", username: "cached", avatarUrl: null, totalScore: 999 }],
+      data: [{ rank: 1, challengeId: "challenge-aaa", username: "cached", avatarUrl: null, totalScore: 999 }],
       cachedAt: "2026-01-01T00:00:00.000Z",
     };
     mocks.redisGet.mockResolvedValue(JSON.stringify(cachedPayload));
@@ -188,6 +214,38 @@ describe("GET /leaderboard/global", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.leaderboard).toEqual([]);
+  });
+
+  it("accepts allowlisted sort values", async () => {
+    const res = await request(createApp())
+      .get("/leaderboard/global")
+      .query({ sort_by: "score" });
+
+    expect(res.status).toBe(200);
+    expect(mocks.getGlobalLeaderboardFromView).toHaveBeenCalled();
+  });
+
+  it("rejects invalid sort values", async () => {
+    const res = await request(createApp())
+      .get("/leaderboard/global")
+      .query({ sort_by: "email" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: "Invalid leaderboard sort. Allowed values: score, rank, created_at",
+      code: "INVALID_SORT",
+    });
+    expect(mocks.getGlobalLeaderboardFromView).not.toHaveBeenCalled();
+  });
+
+  it("rejects SQL-injection probe sort values", async () => {
+    const res = await request(createApp())
+      .get("/leaderboard/global")
+      .query({ sort_by: "score; DROP TABLE users--" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_SORT");
+    expect(mocks.getGlobalLeaderboardFromView).not.toHaveBeenCalled();
   });
 });
 
@@ -214,9 +272,27 @@ describe("GET /leaderboard/:challengeId", () => {
   it("passes limit and offset to getLeaderboard", async () => {
     await request(createApp())
       .get("/leaderboard/c1")
-      .query({ limit: 5, offset: 10 });
+      .query({ limit: 5, offset: 10, order: "rank" });
 
-    expect(mocks.getLeaderboard).toHaveBeenCalledWith("c1", 5, 10);
+    expect(mocks.getLeaderboard).toHaveBeenCalledWith("c1", 6, 10, "rank");
+  });
+
+  it("passes valid sort values to the leaderboard query", async () => {
+    await request(createApp())
+      .get("/leaderboard/c1")
+      .query({ limit: 5, sort_by: "created_at" });
+
+    expect(mocks.getLeaderboard).toHaveBeenCalledWith("c1", 6, 0, "created_at");
+  });
+
+  it("rejects invalid challenge leaderboard sort values", async () => {
+    const res = await request(createApp())
+      .get("/leaderboard/c1")
+      .query({ order: "score; DROP TABLE users--" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_SORT");
+    expect(mocks.getLeaderboard).not.toHaveBeenCalled();
   });
 
   it("issues exactly one leaderboard query regardless of participant count", async () => {

@@ -1,5 +1,6 @@
 import { query } from "../index";
 import { usdcToStroops } from "../../lib/usdc";
+import { encodeCursor, buildCursorWhereSimple, decodeCursorSafe } from "../pagination";
 
 export type ChallengeStatus =
   | "pending_deposit"
@@ -28,6 +29,7 @@ export interface Challenge {
   max_players: number | null;
   starts_at: string;
   ends_at: string | null;
+  reported_count: number;
   deleted_at: string | null;
   created_at: string;
 }
@@ -110,36 +112,179 @@ export async function getChallengeByIdAny(id: string): Promise<Challenge & { arc
   return result.rows[0] ?? null;
 }
 
-export async function getActiveChallenges(limit = 20, offset = 0): Promise<Challenge[]> {
+export async function getActiveChallengesCursor(
+  cursor?: string,
+  limit = 20
+): Promise<{ challenges: Challenge[]; nextCursor: string | null }> {
   const result = await query<Challenge>(
     `SELECT c.*, (c.pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc,
             b.name as brand_name, b.logo_url, b.primary_color, b.secondary_color
      FROM challenges c
      JOIN brands b ON c.brand_id = b.id
      WHERE c.status = 'active' AND c.deleted_at IS NULL AND b.deleted_at IS NULL
-     ORDER BY c.pool_amount_stroops DESC
-     LIMIT $1 OFFSET $2`,
-    [limit, offset]
+       AND ($1::uuid IS NULL OR c.id > $1::uuid)
+     ORDER BY c.id
+     LIMIT $2`,
+    [cursor ?? null, limit + 1]
   );
-  return result.rows;
+
+  const hasMore = result.rows.length > limit;
+  const challenges = result.rows.slice(0, limit);
+  const nextCursor = challenges.length > 0 ? challenges[challenges.length - 1].id : null;
+
+  return { challenges, nextCursor: hasMore ? nextCursor : null };
+}
+
+export async function getActiveChallenges(
+  limit = 20,
+  cursor?: string,
+): Promise<{ challenges: Challenge[]; nextCursor: string | null }> {
+  const cursorValues = decodeCursorSafe(cursor, ["pool_amount_stroops", "id"]);
+
+  let whereExtra = "";
+  const params: unknown[] = [];
+
+  if (cursorValues) {
+    const { clause } = buildCursorWhereSimple(
+      "c.pool_amount_stroops",
+      "DESC",
+      cursorValues.pool_amount_stroops,
+      cursorValues.id as string,
+      3,
+    );
+    whereExtra = clause;
+    params.push(cursorValues.pool_amount_stroops, cursorValues.id);
+  }
+
+  params.push(limit);
+  const result = await query<Challenge>(
+    `SELECT c.*, (c.pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc,
+            b.name as brand_name, b.logo_url, b.primary_color, b.secondary_color
+     FROM challenges c
+     JOIN brands b ON c.brand_id = b.id
+     WHERE c.status = 'active' AND c.deleted_at IS NULL AND b.deleted_at IS NULL
+     ${whereExtra}
+     ORDER BY c.pool_amount_stroops DESC, c.id DESC
+     LIMIT $${params.length}`,
+    params,
+  );
+
+  const challenges = result.rows;
+  const nextCursor: string | null =
+    challenges.length === limit
+      ? encodeCursor({
+          pool_amount_stroops: challenges[challenges.length - 1].pool_amount_stroops,
+          id: challenges[challenges.length - 1].id,
+        })
+      : null;
+
+  return { challenges, nextCursor };
+}
+
+export async function getFilteredChallenges(opts: {
+  status?: "active" | "upcoming" | "ended";
+  minPoolUsdc?: number;
+  endBefore?: string;
+  cursor?: string;
+  limit?: number;
+}): Promise<{ challenges: Challenge[]; nextCursor: string | null }> {
+  const { status, minPoolUsdc, endBefore, cursor, limit = 20 } = opts;
+
+  const conditions: string[] = ["c.deleted_at IS NULL", "b.deleted_at IS NULL"];
+  const params: unknown[] = [];
+
+  if (status === "active") {
+    conditions.push("c.status = 'active'");
+  } else if (status === "upcoming") {
+    conditions.push("c.status = 'pending_deposit'");
+  } else if (status === "ended") {
+    conditions.push("c.status IN ('ended', 'settled', 'payout_failed', 'cancelled', 'refunded')");
+  } else {
+    conditions.push(
+      "c.status IN ('active', 'pending_deposit', 'ended', 'settled', 'payout_failed', 'cancelled', 'refunded')"
+    );
+  }
+
+  if (minPoolUsdc !== undefined) {
+    params.push(String(Math.round(minPoolUsdc * 10_000_000)));
+    conditions.push(`c.pool_amount_stroops >= $${params.length}`);
+  }
+
+  if (endBefore) {
+    params.push(endBefore);
+    conditions.push(`c.ends_at < $${params.length}`);
+  }
+
+  if (cursor) {
+    params.push(cursor);
+    conditions.push(`c.id > $${params.length}::uuid`);
+  }
+
+  params.push(limit + 1);
+
+  const result = await query<Challenge>(
+    `SELECT c.*, (c.pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc,
+            b.name AS brand_name, b.logo_url, b.primary_color, b.secondary_color
+     FROM challenges c
+     JOIN brands b ON c.brand_id = b.id
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY c.pool_amount_stroops DESC, c.id DESC
+     LIMIT $${params.length}`,
+    params
+  );
+
+  const hasMore = result.rows.length > limit;
+  const challenges = result.rows.slice(0, limit);
+  const nextCursor = hasMore && challenges.length > 0 ? challenges[challenges.length - 1].id : null;
+  return { challenges, nextCursor };
 }
 
 export async function getChallengesByBrandId(
   brandId: string,
   limit = 20,
-  offset = 0
-): Promise<Challenge[]> {
+  cursor?: string,
+): Promise<{ challenges: Challenge[]; nextCursor: string | null }> {
+  const cursorValues = decodeCursorSafe(cursor, ["created_at", "id"]);
+
+  let whereExtra = "";
+  const params: unknown[] = [brandId];
+
+  if (cursorValues) {
+    const { clause, params: cursorParams } = buildCursorWhereSimple(
+      "c.created_at",
+      "DESC",
+      cursorValues.created_at,
+      cursorValues.id as string,
+      3,
+    );
+    whereExtra = clause;
+    params.push(cursorValues.created_at, cursorValues.id);
+  }
+
+  params.push(limit);
+
   const result = await query<Challenge>(
     `SELECT c.*, (c.pool_amount_stroops::numeric / 10000000)::numeric(20,7)::text AS pool_amount_usdc,
             b.name as brand_name, b.logo_url, b.primary_color, b.secondary_color
      FROM challenges c
      JOIN brands b ON c.brand_id = b.id
      WHERE c.brand_id = $1 AND c.deleted_at IS NULL
-     ORDER BY c.created_at DESC
-     LIMIT $2 OFFSET $3`,
-    [brandId, limit, offset]
+     ${whereExtra}
+     ORDER BY c.created_at DESC, c.id DESC
+     LIMIT $${params.length}`,
+    params,
   );
-  return result.rows;
+
+  const challenges = result.rows;
+  const nextCursor: string | null =
+    challenges.length === limit
+      ? encodeCursor({
+          created_at: challenges[challenges.length - 1].created_at,
+          id: challenges[challenges.length - 1].id,
+        })
+      : null;
+
+  return { challenges, nextCursor };
 }
 /**
  * Soft-delete a challenge.
@@ -201,6 +346,28 @@ export async function getChallengeQuestions(challengeId: string): Promise<Challe
     [challengeId]
   );
   return result.rows;
+}
+
+export async function deleteChallengeQuestion(questionId: string): Promise<void> {
+  await query("DELETE FROM challenge_questions WHERE id = $1", [questionId]);
+}
+
+export async function insertChallengeQuestion(
+  question: Omit<ChallengeQuestion, "id">
+): Promise<ChallengeQuestion> {
+  const result = await query<ChallengeQuestion>(
+    `INSERT INTO challenge_questions
+       (challenge_id, round, question_type, prompt_type, question_text,
+        correct_answer, option_a, option_b, option_c, option_d, correct_option)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     RETURNING *`,
+    [
+      question.challenge_id, question.round, question.question_type, question.prompt_type,
+      question.question_text, question.correct_answer,
+      question.option_a, question.option_b, question.option_c, question.option_d, question.correct_option,
+    ]
+  );
+  return result.rows[0];
 }
 
 /**

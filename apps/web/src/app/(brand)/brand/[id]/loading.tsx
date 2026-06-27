@@ -3,7 +3,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function BrandAnalyticsLoading() {
   return (
-    <main className="max-w-4xl mx-auto px-6 py-12">
+    <main
+      className="max-w-4xl mx-auto px-6 py-12"
+      role="status"
+      aria-busy="true"
+      aria-label="Loading brand analytics"
+    >
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-4">
           <Skeleton className="h-16 w-32 rounded-md" />
@@ -55,4 +60,3 @@ export default function BrandAnalyticsLoading() {
     </main>
   );
 }
-

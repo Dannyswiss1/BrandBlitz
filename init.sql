@@ -34,6 +34,10 @@ CREATE TABLE users (
   streak_repairs_this_month INTEGER NOT NULL DEFAULT 0,
   streak_repair_available BOOLEAN NOT NULL DEFAULT FALSE,
   role              TEXT NOT NULL DEFAULT 'player' CHECK (role IN ('player', 'brand', 'admin')),
+  status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+  suspension_reason TEXT,
+  suspended_at      TIMESTAMPTZ,
+  suspended_by      UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -43,6 +47,7 @@ CREATE INDEX idx_users_google_id    ON users (google_id);
 CREATE INDEX idx_users_phone_hash   ON users (phone_hash);
 CREATE INDEX idx_users_total_score  ON users (total_score DESC);
 CREATE INDEX idx_users_league       ON users (league);
+CREATE INDEX idx_users_status       ON users (status);
 -- ─────────────────────────────────────────────────────────────────────────────
 -- BRANDS
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -92,11 +97,12 @@ CREATE TABLE challenges (
   )
 );
 
-CREATE INDEX idx_challenges_brand_id      ON challenges (brand_id);
-CREATE INDEX idx_challenges_status        ON challenges (status);
-CREATE INDEX idx_challenges_ends_at       ON challenges (ends_at);
-CREATE INDEX idx_challenges_challenge_id  ON challenges (challenge_id);
-CREATE INDEX idx_challenges_deposit_memo  ON challenges (deposit_memo);
+CREATE INDEX idx_challenges_brand_id        ON challenges (brand_id);
+CREATE INDEX idx_challenges_status          ON challenges (status);
+CREATE INDEX idx_challenges_active_status   ON challenges (status) WHERE status = 'active';
+CREATE INDEX idx_challenges_ends_at         ON challenges (ends_at);
+CREATE INDEX idx_challenges_challenge_id    ON challenges (challenge_id);
+CREATE INDEX idx_challenges_deposit_memo    ON challenges (deposit_memo);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- CHALLENGE QUESTIONS (3 per challenge, server-side only)
@@ -248,6 +254,7 @@ CREATE TABLE fraud_flags (
 
 CREATE INDEX idx_fraud_flags_user_id    ON fraud_flags (user_id);
 CREATE INDEX idx_fraud_flags_session_id ON fraud_flags (session_id);
+CREATE INDEX idx_fraud_flags_created_at ON fraud_flags (created_at DESC);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- LEAGUE ASSIGNMENTS (recalculated weekly)
@@ -267,7 +274,8 @@ CREATE TABLE league_assignments (
   UNIQUE (user_id, week_start)
 );
 
-CREATE INDEX idx_league_assignments_week ON league_assignments (week_start, league, group_id, weekly_points DESC);
+CREATE INDEX idx_league_assignments_week        ON league_assignments (week_start, league, group_id, weekly_points DESC);
+CREATE INDEX idx_league_assignments_week_league ON league_assignments (week_start, league);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- USER BADGES
@@ -405,3 +413,38 @@ CREATE INDEX idx_gdpr_erasure_user_id ON gdpr_erasure_requests (user_id);
 CREATE TRIGGER gdpr_erasure_requests_updated_at
   BEFORE UPDATE ON gdpr_erasure_requests
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHALLENGE REPORTS (user-submitted content flags)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE challenge_reports (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason       TEXT NOT NULL CHECK (reason IN ('misleading_content', 'inappropriate_language', 'factually_incorrect', 'other')),
+  note         TEXT,
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'reviewed', 'dismissed')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (challenge_id, user_id)
+);
+
+CREATE INDEX idx_challenge_reports_challenge_id ON challenge_reports (challenge_id);
+CREATE INDEX idx_challenge_reports_user_id      ON challenge_reports (user_id);
+CREATE INDEX idx_challenge_reports_status       ON challenge_reports (status);
+
+CREATE TRIGGER challenge_reports_updated_at BEFORE UPDATE ON challenge_reports FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- WAITLIST SIGNUPS
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE waitlist_signups (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email        TEXT NOT NULL UNIQUE,
+  email_hash   TEXT NOT NULL,
+  position     SERIAL NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_waitlist_signups_email ON waitlist_signups (email);
+CREATE INDEX idx_waitlist_signups_email_hash ON waitlist_signups (email_hash);

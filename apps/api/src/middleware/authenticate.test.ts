@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/config", () => ({
   config: {
     JWT_SECRET: "test_secret_test_secret_test_secret_123",
+    JWT_ISSUER: "brandblitz-api",
+    JWT_AUDIENCE: "brandblitz-client",
   },
 }));
 
@@ -41,7 +43,11 @@ function mockRes() {
 const next = vi.fn();
 
 function signToken(payload: any, options = {}) {
-  return jwt.sign(payload, SECRET, options);
+  return jwt.sign(
+    { iss: "brandblitz-api", aud: "brandblitz-client", ...payload },
+    SECRET,
+    options
+  );
 }
 
 describe("authenticate middleware", () => {
@@ -91,6 +97,51 @@ describe("authenticate middleware", () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
   });
+
+  it("rejects a token with mismatched iss claim", async () => {
+    const token = jwt.sign(
+      { sub: "user1", email: "user@example.com", iss: "evil-service", aud: "brandblitz-client" },
+      SECRET,
+      { expiresIn: "1h" }
+    );
+    const req = mockReq(token);
+    const res = mockRes();
+
+    await authenticate(req as any, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("rejects a token with mismatched aud claim", async () => {
+    const token = jwt.sign(
+      { sub: "user1", email: "user@example.com", iss: "brandblitz-api", aud: "evil-client" },
+      SECRET,
+      { expiresIn: "1h" }
+    );
+    const req = mockReq(token);
+    const res = mockRes();
+
+    await authenticate(req as any, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("rejects a token with missing iss and aud claims", async () => {
+    const token = jwt.sign(
+      { sub: "user1", email: "user@example.com" },
+      SECRET,
+      { expiresIn: "1h" }
+    );
+    const req = mockReq(token);
+    const res = mockRes();
+
+    await authenticate(req as any, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
 });
 
 describe("authenticateOptional middleware", () => {
@@ -115,6 +166,36 @@ describe("authenticateOptional middleware", () => {
     const req = mockReq(token);
     const res = mockRes();
     mocks.redisGet.mockResolvedValue("1");
+
+    await authenticateOptional(req as any, res, next);
+
+    expect(req.user).toBeUndefined();
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("continues without user for optional token with mismatched iss", async () => {
+    const token = jwt.sign(
+      { sub: "user1", email: "user@example.com", iss: "wrong", aud: "brandblitz-client" },
+      SECRET,
+      { expiresIn: "1h" }
+    );
+    const req = mockReq(token);
+    const res = mockRes();
+
+    await authenticateOptional(req as any, res, next);
+
+    expect(req.user).toBeUndefined();
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("continues without user for optional token with mismatched aud", async () => {
+    const token = jwt.sign(
+      { sub: "user1", email: "user@example.com", iss: "brandblitz-api", aud: "wrong" },
+      SECRET,
+      { expiresIn: "1h" }
+    );
+    const req = mockReq(token);
+    const res = mockRes();
 
     await authenticateOptional(req as any, res, next);
 

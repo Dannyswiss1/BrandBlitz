@@ -5,8 +5,20 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { createApiClient, type Challenge, type ChallengeQuestion } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import { useFingerprint } from "@/hooks/use-fingerprint";
+import { useNetworkStatus } from "@/hooks/use-network-status";
 import { TOTAL_ROUNDS } from "@/components/game/constants";
+import type { AnswerOptionKey } from "@/components/game/answer-option";
+import type { ChallengeAnswerState } from "@/components/game/challenge-round";
+import { OfflineBanner } from "@/components/layout/offline-banner";
+import {
+  SessionRecoveryModal,
+  type SessionRecoveryDetails,
+} from "@/components/game/session-recovery-modal";
+import { scoresForResume, shouldShowRecoveryModal } from "@/components/game/session-recovery";
+import { BrandKitPreview } from "@/components/brand/brand-kit-preview";
+import { ReportModal } from "@/components/game/report-modal";
 
 const WarmupPhase = dynamic(() => import("@/components/game/warmup-phase").then((m) => m.WarmupPhase), {
   loading: () => <div className="min-h-screen flex items-center justify-center">Loading warmup...</div>,
@@ -20,7 +32,7 @@ const ResultScreen = dynamic(() => import("@/components/game/result-screen").the
   loading: () => <div className="min-h-screen flex items-center justify-center">Preparing results...</div>,
 });
 
-type GamePhase = "loading" | "warmup" | "challenge" | "result";
+type GamePhase = "loading" | "preview" | "warmup" | "challenge" | "result";
 
 type CachedChallengeDetail = {
   etag: string;
@@ -53,20 +65,89 @@ interface Props {
   params: Promise<{ id: string }>;
 }
 
+interface RecoverySessionResponse {
+  id: string;
+  status: "warmup" | "in_progress" | "completed" | "expired";
+  last_answered_round: number;
+  current_round: number;
+  remaining_time_ms: number;
+  total_score: number;
+  round_scores?: number[];
+}
+
+const ANSWER_MAX_ATTEMPTS = 3;
+const ANSWER_RETRY_DELAY_MS = 500;
+const ANSWER_SETTLED_DELAY_MS = 450;
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+function errorMessage(err: any): string {
+  return (
+    err?.response?.data?.message ??
+    err?.response?.data?.error ??
+    err?.message ??
+    "Failed to submit answer. Check your connection and try again."
+  );
+}
+
+function toRecoveryDetails(session: RecoverySessionResponse): SessionRecoveryDetails {
+  return {
+    status: session.status === "expired" ? "expired" : "in_progress",
+    currentRound: session.current_round,
+    remainingTimeMs: session.remaining_time_ms,
+    totalScore: session.total_score,
+  };
+}
+
 export function ChallengePage({ params }: Props) {
   const { id: challengeId } = React.use(params);
   const { data: session, status } = useSession();
   const router = useRouter();
   const visitorId = useFingerprint();
+  const { isOnline } = useNetworkStatus();
 
   const [challenge, setChallenge] = React.useState<Challenge | null>(null);
   const [questions, setQuestions] = React.useState<ChallengeQuestion[]>([]);
   const [phase, setPhase] = React.useState<GamePhase>("loading");
   const [currentRound, setCurrentRound] = React.useState<1 | 2 | 3>(1);
-  const [challengeToken, setChallengeToken] = React.useState("");
-  const [sessionId, setSessionId] = React.useState("");
   const [scores, setScores] = React.useState<number[]>([]);
+  const [finalRank, setFinalRank] = React.useState<number | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [answerError, setAnswerError] = React.useState<string | null>(null);
+  const [answerState, setAnswerState] = React.useState<ChallengeAnswerState | null>(null);
+  const [recoverySession, setRecoverySession] = React.useState<RecoverySessionResponse | null>(null);
+  const [showTooltip, setShowTooltip] = React.useState(false);
+  const [showReportModal, setShowReportModal] = React.useState(false);
+
+  const mountedRef = React.useRef(true);
+  const currentRoundRef = React.useRef(currentRound);
+  const answerStateRef = React.useRef(answerState);
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+  const lastAnswerRef = React.useRef<{ option: AnswerOptionKey | null; reactionTimeMs: number } | null>(null);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    currentRoundRef.current = currentRound;
+  }, [currentRound]);
+
+  React.useEffect(() => {
+    answerStateRef.current = answerState;
+  }, [answerState]);
+
+  const apiToken = (session as any)?.apiToken as string | undefined;
+
+  const clearOpenSession = React.useCallback(async () => {
+    if (!apiToken) return;
+    const api = createApiClient(apiToken);
+    await api.delete(`/sessions/${challengeId}`, { skipErrorToast: true });
+  }, [apiToken, challengeId]);
 
   React.useEffect(() => {
     if (!challengeId) return;
@@ -74,141 +155,204 @@ export function ChallengePage({ params }: Props) {
       router.push(`/login?callbackUrl=/challenge/${challengeId}`);
       return;
     }
-    if (status !== "authenticated") return;
+    if (status !== "authenticated" || !apiToken) return;
 
-    const apiToken = (session as any).apiToken as string;
     const api = createApiClient(apiToken);
+    let cancelled = false;
 
     void (async () => {
-      try {
-        const cachedDetail = getCachedChallengeDetail(challengeId);
-        const res = await api.get(`/challenges/${challengeId}`, {
-          headers: cachedDetail?.etag ? { "If-None-Match": cachedDetail.etag } : undefined,
-          // Axios otherwise treats a valid 304 response as an error.
-          validateStatus: (status) => status === 200 || status === 304,
-        });
+      setPhase("loading");
+      setLoadError(null);
+      setRecoverySession(null);
 
-        if (res.status === 304 && cachedDetail) {
-          setChallenge(cachedDetail.challenge);
-          setQuestions(cachedDetail.questions);
-        } else {
-          const detail = {
-            etag: res.headers.etag ?? "",
-            challenge: res.data.challenge as Challenge,
-            questions: res.data.questions as ChallengeQuestion[],
-          };
-          setChallenge(detail.challenge);
-          setQuestions(detail.questions);
-          if (detail.etag) storeChallengeDetail(challengeId, detail);
-        }
+      try {
+        const res = await api.get(`/challenges/${challengeId}`);
+        if (cancelled) return;
+        setChallenge(res.data.challenge);
+        setQuestions(res.data.questions);
       } catch {
-        setLoadError("Couldn't load the challenge. Check your connection and try again.");
+        if (!cancelled) setLoadError("Couldn't load the challenge. Check your connection and try again.");
         return;
       }
 
       try {
-        // Send visitorId (FingerprintJS) as deviceId for anti-cheat multi-account detection.
-        // If FingerprintJS fails to load, visitorId will be null and backend will flag for review.
+        const res = await api.get(`/sessions/${challengeId}`, { skipErrorToast: true });
+        const existing = res.data.session as RecoverySessionResponse;
+        if (cancelled) return;
+
+        if (shouldShowRecoveryModal(existing)) {
+          setRecoverySession(existing);
+          return;
+        }
+      } catch (err: any) {
+        if (err?.response?.status && err.response.status !== 404) {
+          if (!cancelled) setLoadError("Couldn't check your session status. Please try again.");
+          return;
+        }
+      }
+
+      try {
         const r = await api.post(`/sessions/${challengeId}/warmup-start`, { deviceId: visitorId });
-        setSessionId(r.data.sessionId);
-        setPhase("warmup");
+        if (cancelled) return;
+        setPhase("preview");
       } catch {
-        setLoadError("Couldn't start the game session. Please try again.");
+        if (!cancelled) setLoadError("Couldn't start the game session. Please try again.");
       }
     })();
-  }, [challengeId, session, status, router, visitorId]);
 
-  const handleWarmupComplete = (token: string) => {
-    setChallengeToken(token);
-    setPhase("challenge");
-    setCurrentRound(1);
-  };
-
-  // #154 — answer submission must surface errors instead of silently
-  // advancing. Strategy: retry with backoff a few times for transient
-  // failures, then surface an inline banner with a Retry button so
-  // the player can re-attempt without losing the round. We stash the
-  // last attempted answer in state so Retry replays the same payload.
-  const [answerError, setAnswerError] = React.useState<string | null>(null);
-  const lastAnswerRef = React.useRef<{ option: "A" | "B" | "C" | "D"; reactionTimeMs: number } | null>(null);
-  const abortControllerRef = React.useRef<AbortController | null>(null);
-  const mountedRef = React.useRef(true);
-
+  // #557 — Preload first round images during preview/warmup
   React.useEffect(() => {
-    mountedRef.current = true;
+    if (phase !== "preview" || !challenge || questions.length === 0) return;
+
+    const links: HTMLLinkElement[] = [];
+    const imageUrls: string[] = [];
+
+    const firstQuestion = questions[0];
+    if (firstQuestion) {
+      if (firstQuestion.prompt_type === "logo" && challenge.logo_url) {
+        imageUrls.push(challenge.logo_url);
+      }
+    }
+
+    for (const url of imageUrls) {
+      const link = document.createElement("link");
+      link.rel = "preload";
+      link.as = "image";
+      link.href = url;
+      link.fetchPriority = "high";
+      document.head.appendChild(link);
+      links.push(link);
+    }
+
     return () => {
-      mountedRef.current = false;
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
+      for (const link of links) {
+        document.head.removeChild(link);
       }
     };
+  }, [phase, challenge, questions]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiToken, challengeId, router, status, visitorId]);
+
+  const handlePreviewStart = React.useCallback(() => {
+    setPhase("warmup");
   }, []);
 
-  const ANSWER_MAX_ATTEMPTS = 3;
-  const ANSWER_RETRY_DELAY_MS = 500;
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const handlePreviewSkip = React.useCallback(() => {
+    setPhase("warmup");
+  }, []);
+
+  React.useEffect(() => {
+    if (phase !== "challenge") return;
+    if (typeof window === "undefined") return;
+    const dismissed = window.localStorage.getItem("brandblitz:keyboard-tooltip-dismissed");
+    if (!dismissed) {
+      setShowTooltip(true);
+    }
+  }, [phase]);
+
+  React.useEffect(() => {
+    if (!showTooltip) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setShowTooltip(false);
+        try { window.localStorage.setItem("brandblitz:keyboard-tooltip-dismissed", "1"); } catch {}
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [showTooltip]);
+
+  const dismissTooltip = React.useCallback(() => {
+    setShowTooltip(false);
+    try { window.localStorage.setItem("brandblitz:keyboard-tooltip-dismissed", "1"); } catch {}
+  }, []);
+
+  const handleWarmupComplete = async (challengeToken: string) => {
+    if (!apiToken) return;
+    const api = createApiClient(apiToken);
+
+    try {
+      await api.post(`/sessions/${challengeId}/start`, { challengeToken });
+      setScores([]);
+      setAnswerError(null);
+      setAnswerState(null);
+      setCurrentRound(1);
+      setPhase("challenge");
+    } catch {
+      setLoadError("Couldn't start the challenge. Please try again.");
+    }
+  };
 
   const submitAnswer = async (
-    option: "A" | "B" | "C" | "D" | null,
+    option: AnswerOptionKey | null,
     reactionTimeMs: number,
     signal: AbortSignal,
-  ) => {
-    const apiToken = (session as any)?.apiToken as string;
+  ): Promise<{ score: number; correct: boolean }> => {
+    if (!apiToken) throw new Error("Missing API token");
     const api = createApiClient(apiToken);
     let lastError: unknown;
+
     for (let attempt = 0; attempt < ANSWER_MAX_ATTEMPTS; attempt += 1) {
       if (signal.aborted) throw new Error("Aborted");
       try {
         const res = await api.post(
-          `/sessions/${challengeId}/answer/${currentRound}`,
+          `/sessions/${challengeId}/answer/${currentRoundRef.current}`,
           { selectedOption: option, reactionTimeMs },
-          { signal }
+          { signal, skipErrorToast: true },
         );
-        return res.data.score as number;
+        return { score: res.data.score as number, correct: Boolean(res.data.correct) };
       } catch (err: any) {
-        if (err.name === "CanceledError" || err.message === "Aborted") {
-          throw err;
-        }
+        if (err.name === "CanceledError" || err.message === "Aborted") throw err;
         lastError = err;
         if (attempt < ANSWER_MAX_ATTEMPTS - 1) {
           await sleep(ANSWER_RETRY_DELAY_MS);
         }
       }
     }
+
     throw lastError;
   };
 
-  const handleAnswer = async (
-    option: "A" | "B" | "C" | "D" | null,
-    reactionTimeMs: number,
-  ) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+  const handleAnswer = async (option: AnswerOptionKey | null, reactionTimeMs: number) => {
+    if (!isOnline) {
+      toast.error("You are offline. Reconnect before submitting an answer.");
+      return;
     }
+    if (answerStateRef.current?.status === "pending") return;
+
+    abortControllerRef.current?.abort();
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    lastAnswerRef.current = { option, reactionTimeMs };
 
-    lastAnswerRef.current = option ? { option, reactionTimeMs } : null;
     setAnswerError(null);
+    setAnswerState({ selectedOption: option, status: "pending", correct: null });
+
     try {
-      const score = await submitAnswer(option, reactionTimeMs, abortController.signal);
+      const result = await submitAnswer(option, reactionTimeMs, abortController.signal);
       if (!mountedRef.current) return;
-      setScores((prev) => [...prev, score]);
-      // Advance ONLY after the server confirms the round was scored.
-      // Without this guarantee the `scores` array drifts out of sync
-      // with the server's view of the session.
-      if (currentRound < TOTAL_ROUNDS) {
-        setCurrentRound((r) => (r + 1) as 1 | 2 | 3);
+
+      setAnswerState({ selectedOption: option, status: "settled", correct: result.correct });
+      setScores((prev) => [...prev, result.score]);
+      await sleep(ANSWER_SETTLED_DELAY_MS);
+      if (!mountedRef.current || abortController.signal.aborted) return;
+
+      setAnswerState(null);
+      if (currentRoundRef.current < TOTAL_ROUNDS) {
+        setCurrentRound((round) => (round + 1) as 1 | 2 | 3);
       } else {
         setPhase("result");
       }
     } catch (err: any) {
       if (!mountedRef.current || err.name === "CanceledError" || err.message === "Aborted") return;
-      const message =
-        err?.response?.data?.message ??
-        err?.message ??
-        "Failed to submit answer. Check your connection and try again.";
+      const message = errorMessage(err);
+      setAnswerState(null);
       setAnswerError(message);
+      toast.error(message);
     }
   };
 
@@ -218,17 +362,76 @@ export function ChallengePage({ params }: Props) {
     void handleAnswer(last.option, last.reactionTimeMs);
   };
 
+  const handleResume = () => {
+    if (!recoverySession) return;
+    const nextRound = Math.min(Math.max(recoverySession.current_round, 1), 3) as 1 | 2 | 3;
+    const priorScores = scoresForResume(recoverySession);
+
+    setScores(priorScores.length > 0 ? priorScores : [recoverySession.total_score].filter(Boolean));
+    setCurrentRound(nextRound);
+    setAnswerError(null);
+    setAnswerState(null);
+    setRecoverySession(null);
+    setPhase("challenge");
+  };
+
+  const handleForfeit = async () => {
+    try {
+      await clearOpenSession();
+      setRecoverySession(null);
+      setScores([]);
+      setCurrentRound(1);
+      setAnswerError(null);
+      setAnswerState(null);
+      setPhase("warmup");
+      router.replace(`/challenge/${challengeId}`);
+    } catch {
+      toast.error("Couldn't forfeit this session. Please try again.");
+    }
+  };
+
+  const handleStartNew = async () => {
+    try {
+      await clearOpenSession();
+      setRecoverySession(null);
+      setScores([]);
+      setCurrentRound(1);
+      setAnswerError(null);
+      setAnswerState(null);
+      setPhase("warmup");
+    } catch {
+      toast.error("Couldn't start a new session. Please try again.");
+    }
+  };
+
   if (loadError) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-8 text-center">
         <p className="text-lg font-medium text-[var(--foreground)]">{loadError}</p>
         <button
           className="rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] hover:opacity-90"
-          onClick={() => { setLoadError(null); router.refresh(); }}
+          onClick={() => {
+            setLoadError(null);
+            router.refresh();
+          }}
         >
           Try again
         </button>
       </div>
+    );
+  }
+
+  if (recoverySession && (recoverySession.status === "expired" || recoverySession.last_answered_round > 0)) {
+    return (
+      <>
+        <div className="min-h-screen bg-[var(--background)]" />
+        <SessionRecoveryModal
+          session={toRecoveryDetails(recoverySession)}
+          onResume={handleResume}
+          onForfeit={handleForfeit}
+          onStartNew={handleStartNew}
+        />
+      </>
     );
   }
 
@@ -239,26 +442,68 @@ export function ChallengePage({ params }: Props) {
       </div>
     );
   }
-  // #151 — `WarmupPhase` needs apiToken so it can call the
-  // authenticated API client instead of falling back to a missing
-  // /api/proxy/* route. Lifting apiToken into this render scope
-  // (rather than re-reading from session inside the child) keeps
-  // the auth context centralised.
-  const apiToken = (session as any)?.apiToken as string | undefined;
+
+  if (phase === "preview" && challenge) {
+    return (
+      <BrandKitPreview
+        logoUrl={challenge.logo_url ?? null}
+        primaryColor={challenge.primary_color ?? null}
+        secondaryColor={challenge.secondary_color ?? null}
+        tagline={challenge.tagline ?? null}
+        brandName={challenge.brand_name ?? "Brand"}
+        onStart={handlePreviewStart}
+        onSkip={handlePreviewSkip}
+      />
+    );
+  }
+
   if (phase === "warmup" && challenge && apiToken) {
     return (
       <WarmupPhase
         challenge={challenge}
         apiToken={apiToken}
+        deviceId={visitorId ?? "unknown-device"}
         onComplete={handleWarmupComplete}
       />
     );
   }
+
   if (phase === "challenge" && challenge) {
     const question = questions[currentRound - 1];
     if (!question) return null;
+
     return (
-      <div className="min-h-screen p-6">
+      <div className="min-h-screen p-6 pt-16">
+        <button
+          onClick={() => setShowReportModal(true)}
+          className="fixed right-4 top-4 z-40 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] shadow-sm transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          aria-label="Report this challenge"
+        >
+          Report
+        </button>
+        {showTooltip && (
+          <div
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--background)] px-5 py-3 shadow-lg text-sm"
+            role="tooltip"
+            aria-label="Keyboard shortcut hint"
+          >
+            <kbd className="hidden md:inline-flex h-5 w-5 items-center justify-center rounded border border-[var(--border)] bg-[var(--muted)] text-xs font-bold text-[var(--muted-foreground)]" aria-hidden="true">⌨</kbd>
+            <span>Use <kbd className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-[var(--border)] bg-[var(--muted)] px-1 text-xs font-bold" aria-hidden="true">A</kbd>/<kbd className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-[var(--border)] bg-[var(--muted)] px-1 text-xs font-bold" aria-hidden="true">B</kbd>/<kbd className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-[var(--border)] bg-[var(--muted)] px-1 text-xs font-bold" aria-hidden="true">C</kbd>/<kbd className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-[var(--border)] bg-[var(--muted)] px-1 text-xs font-bold" aria-hidden="true">D</kbd> keys to answer faster</span>
+            <button
+              onClick={dismissTooltip}
+              className="ml-2 rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)] transition-colors"
+              aria-label="Dismiss"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+        )}
+        <OfflineBanner blocking />
+        <ReportModal
+          challengeId={challengeId}
+          open={showReportModal}
+          onOpenChange={setShowReportModal}
+        />
         <ChallengeRound
           question={question}
           round={currentRound}
@@ -266,12 +511,25 @@ export function ChallengePage({ params }: Props) {
           brandLogoUrl={challenge.logo_url ?? undefined}
           answerError={answerError}
           onRetry={retryLastAnswer}
+          answerState={answerState}
+          disabled={!isOnline}
+          pauseTimer={!isOnline}
         />
       </div>
     );
   }
+
   if (phase === "result") {
-    return <ResultScreen totalScore={scores.reduce((a, b) => a + b, 0)} challengeId={challengeId} />;
+    return (
+      <ResultScreen
+        totalScore={scores.reduce((a, b) => a + b, 0)}
+        challengeId={challengeId}
+        rank={finalRank ?? undefined}
+        primaryColor={challenge?.primary_color ?? undefined}
+        secondaryColor={challenge?.secondary_color ?? undefined}
+      />
+    );
   }
+
   return null;
 }

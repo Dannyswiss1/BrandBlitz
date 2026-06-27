@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { validateReactionTime, validateDeviceFingerprint, enforceOneSessionPerChallenge, BOT_REACTION_THRESHOLD_MS, MIN_HUMAN_REACTION_MS } from "./anti-cheat";
+import { validateReactionTime, validateDeviceFingerprint, enforceOneSessionPerChallenge, BOT_REACTION_THRESHOLD_MS, MIN_HUMAN_REACTION_MS, validateRoundScore, assertValidTotalScore } from "./anti-cheat";
 import * as fraudQueries from "../db/queries/fraud-flags";
 import { metrics } from "../lib/metrics";
 import * as sessionQueries from "../db/queries/sessions";
 
 vi.mock("../db/queries/fraud-flags");
 vi.mock("../db/queries/sessions");
+vi.mock("../db/queries/config", () => ({ getConfig: vi.fn().mockResolvedValue(null) }));
+vi.mock("../db/index", () => ({ query: vi.fn().mockResolvedValue({ rows: [] }) }));
 vi.mock("../lib/redis", () => ({
   redis: {
     sadd: vi.fn().mockResolvedValue(1),
@@ -13,6 +15,8 @@ vi.mock("../lib/redis", () => ({
     scard: vi.fn().mockResolvedValue(1),
     get: vi.fn(),
     set: vi.fn(),
+    ttl: vi.fn().mockResolvedValue(-2),
+    incr: vi.fn().mockResolvedValue(1),
   },
 }));
 vi.mock("../lib/metrics", () => ({
@@ -24,6 +28,31 @@ vi.mock("../lib/fingerprint", () => ({
 
 import { redis } from "../lib/redis";
 import { computeFingerprint } from "../lib/fingerprint";
+import { requireSessionStartAllowed } from "./anti-cheat";
+import { getConfig } from "../db/queries/config";
+import { query } from "../db/index";
+
+// A minimal Express-like response that records headers and dispatches the
+// "finish" event the lockout middleware listens on.
+function makeRes() {
+  const listeners: Record<string, Array<() => void>> = {};
+  return {
+    statusCode: 200,
+    headers: {} as Record<string, string>,
+    setHeader(key: string, value: string) {
+      this.headers[key] = value;
+    },
+    on(event: string, cb: () => void) {
+      (listeners[event] ??= []).push(cb);
+      return this;
+    },
+    emit(event: string) {
+      (listeners[event] ?? []).forEach((cb) => cb());
+    },
+  };
+}
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 describe("anti-cheat middleware", () => {
   let req: any;
@@ -203,6 +232,188 @@ describe("anti-cheat middleware", () => {
         statusCode: 404,
       });
       expect(next).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("validateRoundScore", () => {
+    it("calls next when roundScore is not in body", async () => {
+      req.body = {};
+      await validateRoundScore(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("calls next for valid roundScore = 0", async () => {
+      req.body.roundScore = 0;
+      await validateRoundScore(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("calls next for valid roundScore = 150", async () => {
+      req.body.roundScore = 150;
+      await validateRoundScore(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("rejects with 422 when roundScore = 151", async () => {
+      req.body.roundScore = 151;
+      await expect(validateRoundScore(req, res, next)).rejects.toMatchObject({
+        statusCode: 422,
+        code: "ROUND_SCORE_OUT_OF_RANGE",
+      });
+      expect(fraudQueries.createFraudFlag).toHaveBeenCalled();
+    });
+
+    it("rejects with 422 when roundScore = -1", async () => {
+      req.body.roundScore = -1;
+      await expect(validateRoundScore(req, res, next)).rejects.toMatchObject({
+        statusCode: 422,
+        code: "ROUND_SCORE_OUT_OF_RANGE",
+      });
+      expect(fraudQueries.createFraudFlag).toHaveBeenCalled();
+    });
+  });
+
+  describe("requireSessionStartAllowed", () => {
+    let lockReq: any;
+    let lockRes: ReturnType<typeof makeRes>;
+    let lockNext: any;
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      lockReq = { user: { sub: "user-1" } };
+      lockRes = makeRes();
+      lockNext = vi.fn();
+      (getConfig as any).mockResolvedValue(null);
+      (redis.get as any).mockResolvedValue(null);
+      (redis.ttl as any).mockResolvedValue(-2);
+      (redis.incr as any).mockResolvedValue(1);
+      (redis.expire as any).mockResolvedValue(1);
+      (query as any).mockResolvedValue({ rows: [] });
+    });
+
+    it("allows the request when under the threshold", async () => {
+      await requireSessionStartAllowed(lockReq, lockRes as any, lockNext);
+      expect(lockNext).toHaveBeenCalledTimes(1);
+    });
+
+    it("increments the failure counter only when the start attempt fails", async () => {
+      await requireSessionStartAllowed(lockReq, lockRes as any, lockNext);
+
+      lockRes.statusCode = 400;
+      lockRes.emit("finish");
+      await flush();
+
+      expect(redis.incr).toHaveBeenCalledWith("lockout:session_start:user-1");
+    });
+
+    it("does NOT increment the counter on a successful start", async () => {
+      await requireSessionStartAllowed(lockReq, lockRes as any, lockNext);
+
+      lockRes.statusCode = 200;
+      lockRes.emit("finish");
+      await flush();
+
+      expect(redis.incr).not.toHaveBeenCalled();
+    });
+
+    it("sets a 1-hour expiry when recording the first failure", async () => {
+      (redis.incr as any).mockResolvedValue(1);
+      await requireSessionStartAllowed(lockReq, lockRes as any, lockNext);
+
+      lockRes.statusCode = 429;
+      lockRes.emit("finish");
+      await flush();
+
+      expect(redis.expire).toHaveBeenCalledWith("lockout:session_start:user-1", 3600);
+    });
+
+    it("blocks with 429 and Retry-After once the threshold is reached", async () => {
+      (redis.get as any).mockResolvedValue("10");
+      (redis.ttl as any).mockResolvedValue(1800);
+
+      await expect(
+        requireSessionStartAllowed(lockReq, lockRes as any, lockNext)
+      ).rejects.toMatchObject({ statusCode: 429, code: "SESSION_START_LOCKED" });
+
+      expect(lockRes.headers["Retry-After"]).toBe("1800");
+      expect(lockNext).not.toHaveBeenCalled();
+    });
+
+    it("writes a session_start_lockout audit event when the counter hits the threshold", async () => {
+      (redis.get as any).mockResolvedValue("9");
+      (redis.incr as any).mockResolvedValue(10);
+
+      await requireSessionStartAllowed(lockReq, lockRes as any, lockNext);
+      lockRes.statusCode = 400;
+      lockRes.emit("finish");
+      await flush();
+
+      expect(query).toHaveBeenCalledWith(
+        expect.stringContaining("INSERT INTO audit_log"),
+        expect.arrayContaining(["user-1"])
+      );
+      const auditCall = (query as any).mock.calls.find((c: any[]) =>
+        String(c[0]).includes("session_start_lockout")
+      );
+      expect(auditCall).toBeDefined();
+    });
+
+    it("honours app_config overrides for threshold and window", async () => {
+      (getConfig as any).mockResolvedValue({ threshold: 2, window_seconds: 60 });
+      (redis.get as any).mockResolvedValue("2");
+      (redis.ttl as any).mockResolvedValue(60);
+
+      await expect(
+        requireSessionStartAllowed(lockReq, lockRes as any, lockNext)
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(lockRes.headers["Retry-After"]).toBe("60");
+    });
+
+    it("fails open when Redis is unavailable", async () => {
+      (redis.get as any).mockRejectedValue(new Error("Redis down"));
+
+      await requireSessionStartAllowed(lockReq, lockRes as any, lockNext);
+
+      expect(lockNext).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips the check for unauthenticated requests", async () => {
+      lockReq.user = undefined;
+
+      await requireSessionStartAllowed(lockReq, lockRes as any, lockNext);
+
+      expect(lockNext).toHaveBeenCalledTimes(1);
+      expect(redis.get).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("assertValidTotalScore", () => {
+    it("does not throw for score = 0", () => {
+      expect(() => assertValidTotalScore(0)).not.toThrow();
+    });
+
+    it("does not throw for score = 450", () => {
+      expect(() => assertValidTotalScore(450)).not.toThrow();
+    });
+
+    it("throws 422 for score = 451", () => {
+      expect(() => assertValidTotalScore(451)).toThrow();
+      try {
+        assertValidTotalScore(451);
+      } catch (err: any) {
+        expect(err.statusCode).toBe(422);
+        expect(err.code).toBe("TOTAL_SCORE_OUT_OF_RANGE");
+      }
+    });
+
+    it("throws 422 for score = -1", () => {
+      expect(() => assertValidTotalScore(-1)).toThrow();
+      try {
+        assertValidTotalScore(-1);
+      } catch (err: any) {
+        expect(err.statusCode).toBe(422);
+        expect(err.code).toBe("TOTAL_SCORE_OUT_OF_RANGE");
+      }
     });
   });
 });

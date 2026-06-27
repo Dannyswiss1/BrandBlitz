@@ -28,7 +28,7 @@
  *     },
  *   });
  *
- *   router.post("/google/callback", (_req, res) => res.sendStatus(204));
+ *   router.post("/google/callback", (req, res) => { ... });
  */
 
 import { OpenAPIRegistry, extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";

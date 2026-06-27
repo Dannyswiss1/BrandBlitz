@@ -8,6 +8,9 @@ import { metrics } from "../lib/metrics";
 import { computeFingerprint } from "../lib/fingerprint";
 import { createError } from "./error";
 import { normalizeClientIp } from "./rate-limit";
+import { MAX_ROUND_SCORE, MAX_TOTAL_SCORE } from "../services/scoring";
+import { config } from "../lib/config";
+import { query } from "../db/index";
 
 export const BOT_REACTION_THRESHOLD_MS = 80;
 // Fallback defaults — override at runtime via PATCH /admin/config/anti_cheat.thresholds
@@ -70,6 +73,7 @@ async function recordFraudFlag(
   if (!sessionId) return;
 
   await createFraudFlag({ sessionId, userId, flagType, details });
+  // Fraud review queries rely on idx_game_sessions_flagged for flagged-session scans.
 
   const severity = (details?.severity as string) || "warning";
   metrics.inc("antiCheat.flags_total", { severity, type: flagType });
@@ -221,4 +225,181 @@ export async function validateDeviceFingerprint(
   }
 
   next();
+}
+
+/**
+ * Anti-cheat Layer 4 — score bounds validation.
+ * Flags sessions where a round score exceeds the per-round maximum.
+ * Called after server-side score computation, before persisting.
+ */
+export async function validateRoundScore(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> {
+  const { roundScore } = req.body as { roundScore?: number };
+
+  if (roundScore === undefined) {
+    next();
+    return;
+  }
+
+  if (!Number.isFinite(roundScore) || roundScore < 0 || roundScore > MAX_ROUND_SCORE) {
+    await recordFraudFlag(req, "round_score_out_of_range", {
+      roundScore,
+      maxAllowed: MAX_ROUND_SCORE,
+      severity: "critical",
+    }).catch(() => {});
+    throw createError(
+      `Round score ${roundScore} exceeds per-round maximum of ${MAX_ROUND_SCORE}`,
+      422,
+      "ROUND_SCORE_OUT_OF_RANGE"
+    );
+  }
+
+  next();
+}
+
+// ─── Session-start brute-force lockout (issue #509) ──────────────────────────
+
+const SESSION_START_LOCKOUT_CONFIG_KEY = "session_start_lockout";
+
+interface SessionStartLockoutConfig {
+  threshold: number;
+  windowSeconds: number;
+}
+
+function sessionStartLockoutKey(userId: string): string {
+  return `lockout:session_start:${userId}`;
+}
+
+/**
+ * Resolve the lockout threshold/window, preferring the runtime-tunable
+ * app_config key `session_start_lockout` and falling back to env-configured
+ * defaults so ops can adjust limits without a deploy.
+ */
+async function getSessionStartLockoutConfig(): Promise<SessionStartLockoutConfig> {
+  const fallback: SessionStartLockoutConfig = {
+    threshold: config.SESSION_START_LOCKOUT_THRESHOLD,
+    windowSeconds: config.SESSION_START_LOCKOUT_WINDOW_SECONDS,
+  };
+  try {
+    const cfg = await getConfig(SESSION_START_LOCKOUT_CONFIG_KEY);
+    const threshold = Number(cfg?.threshold);
+    const windowSeconds = Number(cfg?.window_seconds);
+    return {
+      threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : fallback.threshold,
+      windowSeconds:
+        Number.isFinite(windowSeconds) && windowSeconds > 0
+          ? windowSeconds
+          : fallback.windowSeconds,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeSessionStartLockoutAudit(
+  userId: string,
+  cfg: SessionStartLockoutConfig
+): Promise<void> {
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity, entity_key, before, after)
+     VALUES ($1, 'session_start_lockout', 'user', $2, $3, $4)`,
+    [userId, userId, null, { threshold: cfg.threshold, windowSeconds: cfg.windowSeconds }]
+  );
+}
+
+/**
+ * Brute-force guard for POST /sessions/:challengeId/start.
+ *
+ * Maintains a rolling failure counter in Redis per user
+ * (`lockout:session_start:{userId}`). Once the configured threshold of failed
+ * start attempts is reached within the window, further start requests are
+ * rejected with HTTP 429 + Retry-After until the key's TTL expires. Successful
+ * starts never increment or consume the counter. Fails open if Redis is down.
+ */
+export async function requireSessionStartAllowed(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const userId = req.user?.sub;
+  if (!userId) {
+    next();
+    return;
+  }
+
+  const key = sessionStartLockoutKey(userId);
+  const cfg = await getSessionStartLockoutConfig();
+
+  let count = 0;
+  let ttl = cfg.windowSeconds;
+  try {
+    const [raw, currentTtl] = await Promise.all([redis.get(key), redis.ttl(key)]);
+    count = raw ? parseInt(raw, 10) : 0;
+    if (typeof currentTtl === "number" && currentTtl > 0) ttl = currentTtl;
+  } catch (error) {
+    // Redis outage must never block legitimate logins — fail open.
+    logger.warn("Redis unavailable during session-start lockout check; failing open", {
+      userId,
+      error: (error as Error).message,
+    });
+    next();
+    return;
+  }
+
+  if (count >= cfg.threshold) {
+    res.setHeader("Retry-After", String(ttl));
+    metrics.inc("antiCheat.session_start_lockout_total", {});
+    throw createError(
+      "Too many failed session start attempts. Please try again later.",
+      429,
+      "SESSION_START_LOCKED"
+    );
+  }
+
+  // Increment the failure counter only when the start attempt actually fails.
+  // Registered before next() so the listener observes the final status code.
+  res.on("finish", () => {
+    if (res.statusCode < 400) return;
+    void (async () => {
+      try {
+        const updated = await redis.incr(key);
+        if (updated === 1) {
+          await redis.expire(key, cfg.windowSeconds);
+        }
+        if (updated === cfg.threshold) {
+          await writeSessionStartLockoutAudit(userId, cfg).catch((error) => {
+            logger.warn("Failed to write session_start_lockout audit event", {
+              userId,
+              error: (error as Error).message,
+            });
+          });
+        }
+      } catch (error) {
+        logger.warn("Failed to record session-start failure", {
+          userId,
+          error: (error as Error).message,
+        });
+      }
+    })();
+  });
+
+  next();
+}
+
+/**
+ * Validate that a total session score is within bounds.
+ * Returns a structured error if the value would exceed [0, MAX_TOTAL_SCORE].
+ * Intended for use after score computation and before persistence.
+ */
+export function assertValidTotalScore(totalScore: number): void {
+  if (!Number.isFinite(totalScore) || totalScore < 0 || totalScore > MAX_TOTAL_SCORE) {
+    throw createError(
+      `Total score ${totalScore} is outside valid range [0, ${MAX_TOTAL_SCORE}]`,
+      422,
+      "TOTAL_SCORE_OUT_OF_RANGE"
+    );
+  }
 }

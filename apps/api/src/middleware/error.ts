@@ -33,6 +33,8 @@ export function errorHandler(
 
   statusCode = statusCode ?? 500;
   const isServerError = statusCode >= 500;
+  const nodeEnv = process.env.NODE_ENV ?? config.NODE_ENV;
+  const isProduction = nodeEnv === "production";
 
   if (isServerError) {
     message = "Internal Server Error";
@@ -49,23 +51,33 @@ export function errorHandler(
     captureExceptionSync(err, { method: req.method, url: req.url });
   }
 
-  const payload: Record<string, unknown> = {
-    error: message,
-  };
+  const payload: Record<string, unknown> =
+    isProduction && isServerError
+      ? {
+          error: "Internal Server Error",
+          requestId: res.locals.requestId,
+        }
+      : {
+          error: message,
+        };
 
-  if (err.code) {
+  if (!(isProduction && isServerError) && err.code) {
     payload.code = err.code;
   }
 
-  if (err instanceof ZodError) {
+  if (!(isProduction && isServerError) && err instanceof ZodError) {
     payload.details = err.issues.map((issue) => ({
       path: issue.path,
       message: issue.message,
       code: issue.code,
+      // Surface the rejected field names when strict() rejects unknown keys.
+      ...(issue.code === "unrecognized_keys"
+        ? { keys: (issue as import("zod").ZodUnrecognizedKeysIssue).keys }
+        : {}),
     }));
   }
 
-  if ((process.env.NODE_ENV ?? config.NODE_ENV) === "development" && err.stack) {
+  if (nodeEnv === "development" && err.stack) {
     payload.stack = err.stack;
   }
 

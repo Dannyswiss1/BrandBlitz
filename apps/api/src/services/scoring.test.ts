@@ -5,6 +5,10 @@ import {
   calculatePayoutShare,
   rankWinners,
   SessionSummary,
+  validateRoundScore,
+  validateTotalScore,
+  MAX_ROUND_SCORE,
+  MAX_TOTAL_SCORE,
 } from "./scoring";
 
 describe("scoring service", () => {
@@ -198,6 +202,71 @@ describe("scoring service", () => {
 
         expect(Number.isNaN(score)).toBe(false);
         expect(score >= 0).toBe(true);
+      }
+    });
+  });
+
+  /**
+   * ---------------------------
+   * Score bounds validation
+   * ---------------------------
+   */
+  describe("validateRoundScore", () => {
+    it("accepts score = 0", () => {
+      expect(validateRoundScore(0)).toEqual({ valid: true });
+    });
+
+    it("accepts score = 150 (max per round)", () => {
+      expect(validateRoundScore(MAX_ROUND_SCORE)).toEqual({ valid: true });
+    });
+
+    it("rejects score = 151", () => {
+      const result = validateRoundScore(151);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.code).toBe("ROUND_SCORE_OUT_OF_RANGE");
+      }
+    });
+
+    it("rejects score = -1", () => {
+      const result = validateRoundScore(-1);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.code).toBe("ROUND_SCORE_OUT_OF_RANGE");
+      }
+    });
+
+    it("rejects NaN", () => {
+      expect(validateRoundScore(NaN).valid).toBe(false);
+    });
+
+    it("rejects Infinity", () => {
+      expect(validateRoundScore(Infinity).valid).toBe(false);
+    });
+  });
+
+  describe("validateTotalScore", () => {
+    it("accepts score = 0", () => {
+      expect(validateTotalScore(0)).toEqual({ valid: true });
+    });
+
+    it("accepts score = 450 (max total)", () => {
+      expect(validateTotalScore(MAX_TOTAL_SCORE)).toEqual({ valid: true });
+    });
+
+    it("rejects score = 451", () => {
+      const result = validateTotalScore(451);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.code).toBe("TOTAL_SCORE_OUT_OF_RANGE");
+      }
+    });
+
+    it("rejects score = -1", () => {
+      const result = validateTotalScore(-1);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.code).toBe("TOTAL_SCORE_OUT_OF_RANGE");
       }
     });
   });

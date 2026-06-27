@@ -9,14 +9,15 @@ import {
   updateUserProfile,
   getUserPublicProfileByUsername,
 } from "../db/queries/users";
-import { getReferralStats } from "../services/referrals";
+import { getReferralStats, ensureUserReferralCode } from "../services/referrals";
 import { stroopsToUsdc } from "../lib/usdc";
-import { getStreak, repairStreak } from "../services/streaks";
+import { getStreak, repairStreak, getUserActivity } from "../services/streaks";
+import { query } from "../db";
 import {
   sendVerificationCode,
-  checkVerificationCode,
   hashPhoneNumber,
   normalizePhoneNumber,
+  verifyOtpWithBruteForceProtection,
 } from "../services/phone";
 import { authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
@@ -91,6 +92,64 @@ router.get("/me/referrals/stats", authenticate, async (req, res) => {
   });
 });
 
+router.get("/me/referrals", authenticate, async (req, res) => {
+  const userId = req.user!.sub;
+  const referralCode = await ensureUserReferralCode(userId);
+
+  const referredResult = await query<{
+    id: string;
+    username: string;
+    display_name: string;
+    avatar_url: string | null;
+    created_at: string;
+    paid: boolean;
+  }>(
+    `SELECT
+       u.id,
+       u.username,
+       u.display_name,
+       u.avatar_url,
+       u.created_at,
+       COALESCE(rp.status = 'sent', FALSE) AS paid
+     FROM referrals r
+     JOIN users u ON r.referred_id = u.id
+     LEFT JOIN referral_payouts rp ON r.id = rp.referral_id AND rp.status = 'sent'
+     WHERE r.referrer_id = $1 AND u.deleted_at IS NULL
+     ORDER BY u.created_at DESC`,
+    [userId]
+  );
+
+  const totalsResult = await query<{
+    pending_stroops: string;
+    confirmed_stroops: string;
+  }>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN referrer_id = $1 AND status = 'pending' THEN referrer_amount_stroops ELSE 0 END), 0)::text AS pending_stroops,
+       COALESCE(SUM(CASE WHEN referrer_id = $1 AND status = 'sent' THEN referrer_amount_stroops ELSE 0 END), 0)::text AS confirmed_stroops
+     FROM referral_payouts
+     WHERE referrer_id = $1`,
+    [userId]
+  );
+
+  const totals = totalsResult.rows[0] || { pending_stroops: "0", confirmed_stroops: "0" };
+
+  res.json({
+    referralCode,
+    referredUsers: referredResult.rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url,
+      joinedAt: row.created_at,
+      bonusPaid: row.paid,
+    })),
+    bonusStatus: {
+      pendingUsdc: stroopsToUsdc(BigInt(totals.pending_stroops)),
+      confirmedUsdc: stroopsToUsdc(BigInt(totals.confirmed_stroops)),
+    },
+  });
+});
+
 router.post("/streaks/repair", authenticate, async (req, res) => {
   const repaired = await repairStreak(req.user!.sub);
   if (!repaired) {
@@ -118,8 +177,11 @@ router.get("/profile/:username", apiLimiter, async (req, res) => {
   const user = await getUserPublicProfileByUsername(username);
   if (!user) throw createError("User not found", 404);
 
+  const isOwner = req.user?.sub === user.id;
+
   res.json({
     user: {
+      userId: isOwner ? user.id : undefined,
       displayName: user.display_name,
       username: user.username,
       league: user.league,
@@ -127,6 +189,8 @@ router.get("/profile/:username", apiLimiter, async (req, res) => {
       totalChallenges: user.challenges_played,
       avatarUrl: user.avatar_url,
       streak: user.streak,
+      createdAt: user.created_at,
+      isOwner,
     },
   });
 });
@@ -145,11 +209,27 @@ router.get("/:id/badges", authenticate, async (req, res) => {
 });
 
 /**
+ * GET /users/:username/activity
+ * Returns 365 days of activity (date and session_count) for the trailing year.
+ * Public endpoint - no authentication required.
+ */
+router.get("/:username/activity", apiLimiter, async (req, res) => {
+  const { username } = z.object({ username: z.string() }).parse(req.params);
+
+  const user = await getUserPublicProfileByUsername(username);
+  if (!user) throw createError("User not found", 404);
+
+  const activity = await getUserActivity(user.id);
+  res.json(activity);
+});
+
+/**
  * PATCH /users/me/wallet
  */
 router.patch("/me/wallet", authenticate, async (req, res) => {
   const { stellarAddress } = z
     .object({ stellarAddress: z.string().min(56).max(70) })
+    .strict()
     .parse(req.body);
 
   await updateUserWallet(req.user!.sub, stellarAddress);
@@ -239,18 +319,78 @@ router.post("/me/phone/verify", authenticate, async (req, res) => {
     throw createError("Phone number already associated with another account", 409);
   }
 
-  const approved = await checkVerificationCode(normalizedPhone, code);
-  if (!approved) {
-    const attemptsKey = `phone:verify:${phoneHash}`;
-    const attempts = await redis.incr(attemptsKey);
-    if (attempts === 1) await redis.expire(attemptsKey, 300);
-    throw createError("Invalid verification code", 400);
+  // verifyOtpWithBruteForceProtection throws 429 (with retryAfter) on lockout,
+  // 400 on wrong code, and nothing on success.
+  try {
+    await verifyOtpWithBruteForceProtection(normalizedPhone, code);
+  } catch (err: any) {
+    if (err.statusCode === 429 && err.retryAfter != null) {
+      res.set("Retry-After", String(err.retryAfter));
+    }
+    throw err;
   }
 
   const existingKey = `phone:hash:${phoneHash}`;
   await markPhoneVerified(req.user!.sub, phoneHash);
   await redis.set(existingKey, req.user!.sub, "EX", 86400 * 365);
-  await redis.del(`phone:verify:${phoneHash}`);
+
+  res.json({ success: true });
+});
+
+/**
+ * GET /users/me/notifications
+ * Returns the 50 most recent unread notifications for the authenticated user.
+ */
+router.get("/me/notifications", authenticate, async (req, res) => {
+  const result = await query<{
+    id: string;
+    type: string;
+    payload: Record<string, unknown>;
+    read_at: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, type, payload, read_at, created_at
+     FROM notifications
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT 50`,
+    [req.user!.sub]
+  );
+
+  res.json({ notifications: result.rows });
+});
+
+/**
+ * PATCH /users/me/notifications/:id/read
+ * Marks a single notification as read.
+ */
+router.patch("/me/notifications/:id/read", authenticate, async (req, res) => {
+  const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+
+  const result = await query<{ id: string }>(
+    `UPDATE notifications
+     SET read_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND read_at IS NULL
+     RETURNING id`,
+    [id, req.user!.sub]
+  );
+
+  if (result.rows.length === 0) {
+    throw createError("Notification not found", 404);
+  }
+
+  res.json({ success: true });
+});
+
+/**
+ * PATCH /users/me/notifications/read-all
+ * Marks all unread notifications as read.
+ */
+router.patch("/me/notifications/read-all", authenticate, async (req, res) => {
+  await query(
+    `UPDATE notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL`,
+    [req.user!.sub]
+  );
 
   res.json({ success: true });
 });

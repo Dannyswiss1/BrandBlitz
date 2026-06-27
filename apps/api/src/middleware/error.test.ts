@@ -31,6 +31,7 @@ function makeResponse() {
   const status = vi.fn().mockReturnValue({ json });
 
   return {
+    locals: { requestId: "req-test-123" },
     status,
     json,
   } as any;
@@ -65,7 +66,10 @@ describe("error middleware", () => {
     errorHandler(new Error("Boom"), req, res, vi.fn());
 
     expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: "Internal Server Error" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Internal Server Error",
+      requestId: "req-test-123",
+    });
   });
 
   it("includes stack trace in development only", () => {
@@ -94,7 +98,31 @@ describe("error middleware", () => {
     errorHandler(error, req, res, vi.fn());
 
     expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: "Internal Server Error" });
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Internal Server Error",
+      requestId: "req-test-123",
+    });
+  });
+
+  it("strips database error details from production 5xx responses", () => {
+    process.env.NODE_ENV = "production";
+    const req = makeRequest();
+    const res = makeResponse();
+    const error = Object.assign(new Error("duplicate key violates unique constraint users_email_key"), {
+      code: "23505",
+      table: "users",
+      column: "email",
+      constraint: "users_email_key",
+      stack: "db-stack",
+    });
+
+    errorHandler(error as any, req, res, vi.fn());
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Internal Server Error",
+      requestId: "req-test-123",
+    });
   });
 
   it("maps ZodError to 400 with field-level details", () => {

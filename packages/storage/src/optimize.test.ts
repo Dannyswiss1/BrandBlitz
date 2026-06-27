@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { optimizeImage, StorageError } from "./optimize";
+import { optimizeImage, StorageError, assertImageMatchesDeclaredType } from "./optimize";
 import { s3, uploadObject } from "./client";
 import sharp from "sharp";
 
@@ -161,5 +161,51 @@ describe("optimizeImage", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Unsupported image format: undefined"));
 
     warnSpy.mockRestore();
+  });
+
+  it("throws when the declared ContentType does not match the decoded format", async () => {
+    vi.mocked(s3.send).mockResolvedValueOnce({
+      ContentType: "image/png",
+      Body: { transformToByteArray: async () => dummyBuffer },
+    });
+    // Sharp decodes the bytes as a JPEG, contradicting the declared image/png.
+    vi.mocked(sharp).mockReturnValueOnce({
+      metadata: vi.fn().mockResolvedValue({ format: "jpeg" }),
+    } as never);
+
+    await expect(optimizeImage("forged.png", "brand-logo")).rejects.toThrow(StorageError);
+  });
+});
+
+describe("assertImageMatchesDeclaredType (issue #505)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const buf = Buffer.from("img");
+
+  it("resolves when Sharp's format matches the declared MIME", async () => {
+    vi.mocked(sharp).mockReturnValueOnce({
+      metadata: vi.fn().mockResolvedValue({ format: "png" }),
+    } as never);
+    await expect(assertImageMatchesDeclaredType(buf, "image/png")).resolves.toBeUndefined();
+  });
+
+  it("throws when Sharp's format differs from the declared MIME", async () => {
+    vi.mocked(sharp).mockReturnValueOnce({
+      metadata: vi.fn().mockResolvedValue({ format: "gif" }),
+    } as never);
+    await expect(assertImageMatchesDeclaredType(buf, "image/png")).rejects.toThrow(StorageError);
+  });
+
+  it("throws when Sharp cannot decode the buffer", async () => {
+    vi.mocked(sharp).mockReturnValueOnce({
+      metadata: vi.fn().mockRejectedValue(new Error("bad image")),
+    } as never);
+    await expect(assertImageMatchesDeclaredType(buf, "image/png")).rejects.toThrow(StorageError);
+  });
+
+  it("throws for an unsupported declared MIME type", async () => {
+    await expect(assertImageMatchesDeclaredType(buf, "application/pdf")).rejects.toThrow(StorageError);
   });
 });

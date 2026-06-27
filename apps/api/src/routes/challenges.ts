@@ -3,18 +3,27 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   getActiveChallenges,
+  getActiveChallengesCursor,
+  getFilteredChallenges,
   getChallengeByIdAny,
   getChallengesByBrandId,
   getChallengeQuestions,
 } from "../db/queries/challenges";
 import { getBrandById } from "../db/queries/brands";
-import { getLeaderboard, getArchivedLeaderboard } from "../db/queries/sessions";
+import {
+  getLeaderboard,
+  getArchivedLeaderboard,
+  LEADERBOARD_SORTS,
+  type LeaderboardSort,
+} from "../db/queries/sessions";
 import { optionalAuth, authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
+import { reportLimiter } from "../middleware/rate-limit";
 import { withCoalescing } from "../lib/cache";
-import { config } from "../lib/config";
 import { redis } from "../lib/redis";
-import { query } from "../db/index";
+import { config } from "../lib/config";
+import { CursorQuerySchema } from "../db/pagination";
+import { query, pool } from "../db/index";
 
 const router = Router();
 const CHALLENGE_DETAIL_CACHE_TTL_SECONDS = 60;
@@ -43,12 +52,21 @@ function etagMatches(ifNoneMatch: string | undefined, etag: string): boolean {
   });
 }
 
-const PaginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  offset: z.coerce.number().int().min(0).default(0),
-  brandId: z.string().uuid().optional(),
-});
+const CHALLENGES_CACHE_TTL_SEC = 10;
 
+const LeaderboardSortSchema = z.enum(LEADERBOARD_SORTS).default("score");
+
+function parseLeaderboardSort(query: Record<string, unknown>): LeaderboardSort {
+  const parsed = LeaderboardSortSchema.safeParse(query.sort_by ?? query.order);
+  if (!parsed.success) {
+    throw createError(
+      `Invalid leaderboard sort. Allowed values: ${LEADERBOARD_SORTS.join(", ")}`,
+      400,
+      "INVALID_SORT",
+    );
+  }
+  return parsed.data;
+}
 /**
  * Get required deposit confirmations from app_config.
  */
@@ -59,35 +77,56 @@ async function getRequiredConfirmations(): Promise<number> {
   return result.rows[0]?.value?.confirmations ?? 5;
 }
 
+const ChallengeFilterSchema = CursorQuerySchema.extend({
+  brandId: z.string().uuid().optional(),
+  status: z.enum(["active", "upcoming", "ended"]).optional(),
+  min_pool: z.coerce.number().min(0).optional(),
+  end_before: z.string().datetime({ offset: true }).optional(),
+});
+
 /**
  * GET /challenges
- * List active challenges (public).
+ * List challenges (public). Supports keyset cursor pagination via ?cursor.
+ * Optional filters: ?status=, ?min_pool= (USDC), ?end_before= (ISO datetime).
+ * Legacy ?offset parameter is accepted but ignored; clients should migrate to ?cursor.
  */
 router.get("/", optionalAuth, async (req, res) => {
-  const parsed = PaginationSchema.safeParse(req.query);
+  const parsed = ChallengeFilterSchema.safeParse(req.query);
   if (!parsed.success) {
     throw createError("Invalid query parameters", 400, "INVALID_QUERY");
   }
 
-  const { brandId, limit, offset } = parsed.data;
+  const { brandId, limit, cursor, status, min_pool, end_before } = parsed.data;
 
   if (brandId) {
-    const brand = await getBrandById(brandId);
-    if (!brand || brand.owner_user_id !== req.user?.sub) {
-      throw createError("Forbidden", 403);
-    }
-
-    const challenges = await getChallengesByBrandId(brandId, limit, offset);
-    res.json({ challenges });
+    const { challenges, nextCursor } = await getChallengesByBrandId(brandId, limit, cursor);
+    res.json({ data: challenges, nextCursor });
     return;
   }
 
-  const challenges = await withCoalescing(
-    `challenges:active:${limit}:${offset}`,
-    60,
-    () => getActiveChallenges(limit, offset)
-  );
-  res.json({ challenges });
+  const hasFilters = status !== undefined || min_pool !== undefined || end_before !== undefined;
+
+  if (!hasFilters) {
+    const cacheKey = `challenges:active:global:${cursor ?? "start"}:${limit}`;
+    const cacheHit = await redis.get(cacheKey);
+    const result = await withCoalescing(
+      cacheKey,
+      CHALLENGES_CACHE_TTL_SEC,
+      () => getActiveChallengesCursor(cursor, limit)
+    );
+    res.setHeader("X-Cache", cacheHit !== null ? "HIT" : "MISS");
+    res.json({ data: result.challenges, nextCursor: result.nextCursor });
+    return;
+  }
+
+  const { challenges, nextCursor } = await getFilteredChallenges({
+    status,
+    minPoolUsdc: min_pool,
+    endBefore: end_before,
+    cursor,
+    limit,
+  });
+  res.json({ data: challenges, nextCursor });
 });
 
 /**
@@ -142,21 +181,22 @@ router.get("/:id", optionalAuth, async (req, res) => {
 
 /**
  * GET /challenges/:id/leaderboard
- * Paginated leaderboard for a challenge.
+ * Paginated leaderboard for a challenge. Supports keyset cursor pagination.
  */
 router.get("/:id/leaderboard", async (req, res) => {
   const challenge = await getChallengeByIdAny(req.params.id);
   if (!challenge) throw createError("Challenge not found", 404);
 
-  const { limit, offset } = PaginationSchema.parse(req.query);
-  const sessions = challenge.archived
-    ? await getArchivedLeaderboard(challenge.id, limit, offset)
-    : await getLeaderboard(challenge.id, limit, offset);
+  const sortBy = parseLeaderboardSort(req.query);
+  const { limit, cursor } = CursorQuerySchema.parse(req.query);
+  const result = challenge.archived
+    ? await getArchivedLeaderboard(challenge.id, limit, cursor)
+    : await getLeaderboard(challenge.id, limit, cursor, sortBy);
 
   res.json({
     challengeId: challenge.id,
-    sessions: sessions.map((s, i) => ({
-      rank: offset + i + 1,
+    nextCursor: result.nextCursor,
+    sessions: result.sessions.map((s, i) => ({
       userId: s.user_id,
       username: s.username,
       displayName: s.display_name,
@@ -197,6 +237,65 @@ router.get("/:id/deposit-info", authenticate, async (req, res) => {
       amount: challenge.pool_amount_usdc,
     },
   });
+});
+
+/**
+ * POST /challenges/:id/report
+ * Report inappropriate challenge content. Requires authentication.
+ * Rate-limited per user; one report per user per challenge enforced via challenge_reports.
+ * Atomically increments reported_count within a transaction.
+ */
+router.post("/:id/report", authenticate, reportLimiter, async (req, res) => {
+  const challenge = await getChallengeByIdAny(req.params.id);
+  if (!challenge) throw createError("Challenge not found", 404);
+
+  const ReportSchema = z.object({
+    reason: z.enum([
+      "misleading_content",
+      "inappropriate_language",
+      "factually_incorrect",
+      "other",
+    ]),
+    note: z.string().max(500).optional(),
+  });
+
+  const body = ReportSchema.parse(req.body);
+  const userId = req.user!.sub;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const existing = await client.query(
+      `SELECT id FROM challenge_reports WHERE challenge_id = $1 AND user_id = $2`,
+      [challenge.id, userId]
+    );
+
+    if (existing.rows.length > 0) {
+      await client.query("ROLLBACK");
+      throw createError("You have already reported this challenge", 409, "ALREADY_REPORTED");
+    }
+
+    await client.query(
+      `INSERT INTO challenge_reports (challenge_id, user_id, reason, note)
+       VALUES ($1, $2, $3, $4)`,
+      [challenge.id, userId, body.reason, body.note ?? null]
+    );
+
+    await client.query(
+      `UPDATE challenges SET reported_count = reported_count + 1 WHERE id = $1`,
+      [challenge.id]
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  res.status(201).json({ success: true });
 });
 
 export default router;

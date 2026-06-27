@@ -184,6 +184,8 @@ export interface UserProfile {
   avatarUrl: string | null;
   streak?: number;
   bestScore?: number;
+  createdAt?: string;
+  isOwner?: boolean;
   recentSessions?: Array<{
     id: string;
     brandName: string;

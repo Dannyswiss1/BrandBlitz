@@ -199,7 +199,7 @@ describe("upload routes integration", () => {
     expect(response.body.exists).toBe(true);
   });
 
-  it("POST /upload/verify returns 400 and deletes when magic bytes mismatch declared MIME", async () => {
+  it("POST /upload/verify returns 415 and deletes when magic bytes mismatch declared MIME", async () => {
     mockSend.mockResolvedValueOnce({ ContentType: "image/png" });
     // JPEG magic bytes — mismatch with declared image/png
     const jpegMagic = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
@@ -211,10 +211,46 @@ describe("upload routes integration", () => {
     const response = await request(app)
       .post("/upload/verify")
       .send({ key: "logos/bad.png" })
-      .expect(400);
+      .expect(415);
 
     expect(response.body.error).toBe("File content does not match declared content type");
     expect(mockSend).toHaveBeenCalledTimes(3);
+  });
+
+  it("POST /upload/verify returns 415 for a renamed non-image file (.jpg with text content)", async () => {
+    mockSend.mockResolvedValueOnce({ ContentType: "image/jpeg" });
+    // A PHP webshell renamed to .jpg — no valid image signature.
+    const phpShell = Buffer.from("<?php system($_GET['c']); ?>", "ascii");
+    mockSend.mockResolvedValueOnce({
+      Body: { transformToByteArray: async () => phpShell },
+    });
+    mockSend.mockResolvedValueOnce({}); // DeleteObject
+
+    const response = await request(app)
+      .post("/upload/verify")
+      .send({ key: "products/webshell.jpg" })
+      .expect(415);
+
+    expect(response.body.error).toBe("File content does not match declared content type");
+    expect(mockSend).toHaveBeenCalledTimes(3);
+  });
+
+  it("POST /upload/verify returns 413 and deletes when the object exceeds the size cap", async () => {
+    // brand-logo cap is 2MB; HeadObject reports 3MB.
+    mockSend.mockResolvedValueOnce({
+      ContentType: "image/png",
+      ContentLength: 3 * 1024 * 1024,
+    });
+    mockSend.mockResolvedValueOnce({}); // DeleteObject
+
+    const response = await request(app)
+      .post("/upload/verify")
+      .send({ key: "logos/huge.png" })
+      .expect(413);
+
+    expect(response.body.error).toMatch(/exceeds maximum allowed size/i);
+    // Rejected before any byte read — only Head + Delete were issued.
+    expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
   it("POST /upload/presign rejects SVG files at the API layer", async () => {

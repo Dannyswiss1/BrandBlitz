@@ -14,8 +14,14 @@ import { feeBumpTransaction } from "@brandblitz/stellar";
 import { updatePayoutFeeBumpStatus } from "../db/queries/payouts";
 import { config } from "../lib/config";
 import { query } from "../db/index";
+import { webhookRotationLimiter } from "../middleware/rate-limit";
 
 const router = Router();
+
+// Admin leaderboard-style queries must follow the same rule as
+// routes/leaderboard.ts: validate sort params against an allowlist before
+// choosing an ORDER BY expression. This file currently has no user-controlled
+// leaderboard ORDER BY clauses.
 
 router.use(authenticate);
 
@@ -242,6 +248,179 @@ router.post("/payouts/:id/fee-bump", async (req, res) => {
       500,
       "FEE_BUMP_FAILED"
     );
+  }
+});
+
+// ── Webhook Secret Rotation ─────────────────────────────────────────────────
+
+const RotateSecretSchema = z.object({
+  newSecret: z.string().min(32).max(256),
+  gracePeriodMinutes: z.number().int().min(5).max(1440).default(60),
+});
+
+/**
+ * POST /admin/webhooks/rotate-secret
+ * Initiates a zero-downtime webhook secret rotation by writing the new secret
+ * to app_config as the pending secret with an expiration timestamp.
+ */
+router.post("/webhooks/rotate-secret", webhookRotationLimiter, async (req, res) => {
+  const body = RotateSecretSchema.parse(req.body);
+  const actorId = req.user!.sub;
+
+  // Get current secret from app_config
+  const currentResult = await query<{ value: { secret: string } }>(
+    `SELECT value FROM app_config WHERE key = 'webhook_secret_current'`
+  );
+
+  if (!currentResult.rows[0]) {
+    throw createError("No current webhook secret configured", 400);
+  }
+
+  const currentSecret = currentResult.rows[0].value.secret;
+
+  // Prevent rotating to the same secret
+  if (currentSecret === body.newSecret) {
+    throw createError("New secret must be different from current secret", 400);
+  }
+
+  // Calculate expiration time
+  const pendingExpiresAt = new Date(Date.now() + body.gracePeriodMinutes * 60 * 1000);
+
+  // Begin transaction
+  await query("BEGIN");
+
+  try {
+    // Update current secret if it doesn't exist
+    await query(
+      `INSERT INTO app_config (key, value) VALUES ('webhook_secret_current', $1)
+       ON CONFLICT (key) DO NOTHING`,
+      [JSON.stringify({ secret: currentSecret })]
+    );
+
+    // Set pending secret
+    await query(
+      `INSERT INTO app_config (key, value) VALUES ('webhook_secret_pending', $1)
+       ON CONFLICT (key) DO UPDATE SET value = $1`,
+      [JSON.stringify({ secret: body.newSecret, expiresAt: pendingExpiresAt.toISOString() })]
+    );
+
+    // Record audit log
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity, entity_key, before, after)
+       VALUES ($1, 'webhook_secret_rotate', 'webhook_config', 'webhook_secret', $2, $3)`,
+      [
+        actorId,
+        JSON.stringify({ key: "webhook_secret_pending", value: null }),
+        JSON.stringify({
+          key: "webhook_secret_pending",
+          value: { expiresAt: pendingExpiresAt.toISOString() },
+        }),
+      ]
+    );
+
+    await query("COMMIT");
+
+    logger.info("Webhook secret rotation initiated", {
+      actorId,
+      expiresAt: pendingExpiresAt.toISOString(),
+    });
+
+    res.json({
+      message: "Pending secret set. Use POST /admin/webhooks/complete-rotation to promote it.",
+      expiresAt: pendingExpiresAt.toISOString(),
+    });
+  } catch (error) {
+    await query("ROLLBACK");
+    throw error;
+  }
+});
+
+/**
+ * POST /admin/webhooks/complete-rotation
+ * Promotes the pending webhook secret to current, clearing the pending fields.
+ * Must be called within the grace period before the pending secret expires.
+ */
+router.post("/webhooks/complete-rotation", webhookRotationLimiter, async (req, res) => {
+  const actorId = req.user!.sub;
+
+  // Get pending secret
+  const pendingResult = await query<{ value: { secret: string; expiresAt: string } }>(
+    `SELECT value FROM app_config WHERE key = 'webhook_secret_pending'`
+  );
+
+  if (!pendingResult.rows[0]) {
+    throw createError("No pending webhook secret to complete rotation", 400);
+  }
+
+  const pendingValue = pendingResult.rows[0].value;
+
+  // Check if pending secret has expired
+  if (new Date(pendingValue.expiresAt) < new Date()) {
+    // Clear expired pending secret
+    await query(`DELETE FROM app_config WHERE key = 'webhook_secret_pending'`);
+
+    // Record audit log
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity, entity_key, before, after)
+       VALUES ($1, 'webhook_secret_rotation_expired', 'webhook_config', 'webhook_secret', $2, $3)`,
+      [
+        actorId,
+        JSON.stringify({ key: "webhook_secret_pending", value: pendingValue }),
+        JSON.stringify({ key: "webhook_secret_pending", value: null }),
+      ]
+    );
+
+    throw createError("Pending secret has expired. Please initiate a new rotation.", 400);
+  }
+
+  // Get current secret for audit
+  const currentResult = await query<{ value: { secret: string } }>(
+    `SELECT value FROM app_config WHERE key = 'webhook_secret_current'`
+  );
+
+  const currentSecret = currentResult.rows[0]?.value?.secret;
+
+  // Begin transaction
+  await query("BEGIN");
+
+  try {
+    // Promote pending to current
+    await query(
+      `INSERT INTO app_config (key, value) VALUES ('webhook_secret_current', $1)
+       ON CONFLICT (key) DO UPDATE SET value = $1`,
+      [JSON.stringify({ secret: pendingValue.secret })]
+    );
+
+    // Clear pending secret
+    await query(`DELETE FROM app_config WHERE key = 'webhook_secret_pending'`);
+
+    // Record audit log
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity, entity_key, before, after)
+       VALUES ($1, 'webhook_secret_rotate_complete', 'webhook_config', 'webhook_secret', $2, $3)`,
+      [
+        actorId,
+        JSON.stringify({
+          key: "webhook_secret_current",
+          value: currentSecret ? { secret: "[redacted]" } : null,
+        }),
+        JSON.stringify({
+          key: "webhook_secret_current",
+          value: { secret: "[redacted]" },
+        }),
+      ]
+    );
+
+    await query("COMMIT");
+
+    logger.info("Webhook secret rotation completed", { actorId });
+
+    res.json({
+      message: "Webhook secret rotation completed. New secret is now active.",
+    });
+  } catch (error) {
+    await query("ROLLBACK");
+    throw error;
   }
 });
 

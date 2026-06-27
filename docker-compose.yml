@@ -182,6 +182,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+      NEXT_PUBLIC_CDN_HOST: ${NEXT_PUBLIC_CDN_HOST:-}
       NEXT_PUBLIC_STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
       NEXT_PUBLIC_S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://localhost:9000}
     depends_on:
@@ -189,7 +190,10 @@ services:
         condition: service_started
 
   nginx:
-    image: nginx:stable-alpine
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    image: brandblitz-nginx:${APP_VERSION:-dev}
     ports:
       - "80:80"
     volumes:

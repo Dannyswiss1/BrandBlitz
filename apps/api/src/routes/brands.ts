@@ -13,10 +13,16 @@ import {
   toPublicBrandApi,
   updateBrand,
   deleteBrand,
+  getBrandChallengeStats,
 } from "../db/queries/brands";
+import { getBrandAnalytics } from "../db/queries/analytics";
 import {
   createChallenge,
   insertChallengeQuestions,
+  getChallengeQuestions,
+  getChallengesByBrandId,
+  deleteChallengeQuestion,
+  insertChallengeQuestion,
 } from "../db/queries/challenges";
 import { generateChallengeQuestions } from "../services/questions";
 import { optimizeImage, StorageError } from "@brandblitz/storage";
@@ -25,6 +31,9 @@ import { requireCurrentTosAccepted } from "../middleware/require-tos";
 import { createError } from "../middleware/error";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
+import { MIN_POOL_STROOPS } from "@brandblitz/stellar";
+import { query } from "../db/index";
+import { sanitizeSvgText } from "../lib/svg-sanitize";
 
 const router = Router();
 const PublicBrandsQuerySchema = z.object({
@@ -49,7 +58,19 @@ const BrandKitSchema = z.object({
 
 const ChallengeSchema = z.object({
   brandId: z.string().uuid(),
-  poolAmountUsdc: z.string().regex(/^\d+(\.\d{1,7})?$/),
+  poolAmountUsdc: z
+    .string()
+    .regex(/^\d+(\.\d{1,7})?$/)
+    .refine(
+      (val) => {
+        // Convert USDC amount to stroops and check minimum
+        const stroops = Math.round(parseFloat(val) * 10_000_000);
+        return stroops >= MIN_POOL_STROOPS;
+      },
+      {
+        message: `Pool amount must be at least 100 USDC (${MIN_POOL_STROOPS.toLocaleString()} stroops)`,
+      }
+    ),
   maxPlayers: z.number().int().positive().optional(),
   endsAt: z.string().datetime(),
 });
@@ -77,19 +98,34 @@ function validateChallengeEndsAt(endsAt: string): void {
 
 /**
  * GET /brands/public
- * Safe, unauthenticated data for ISR brand-profile pages.
+ * Public directory of all brands with active challenge counts. No auth required.
  */
 router.get("/public", async (req, res) => {
-  const { limit } = PublicBrandsQuerySchema.parse(req.query);
-  const brands = await getPublicBrands(limit);
-  res.json({ brands: brands.map(toPublicBrandApi) });
-});
+  const result = await query<{
+    id: string;
+    name: string;
+    tagline: string | null;
+    logo_url: string | null;
+    primary_color: string | null;
+    category: string | null;
+    active_challenge_count: number;
+  }>(
+    `SELECT
+       b.id,
+       b.name,
+       b.tagline,
+       b.logo_url,
+       b.primary_color,
+       NULL AS category,
+       COUNT(c.id) FILTER (WHERE c.status = 'active')::int AS active_challenge_count
+     FROM brands b
+     LEFT JOIN challenges c ON c.brand_id = b.id
+     WHERE b.deleted_at IS NULL
+     GROUP BY b.id
+     ORDER BY b.name ASC`
+  );
 
-/** GET /brands/public/:id */
-router.get("/public/:id", async (req, res) => {
-  const brand = await getPublicBrandById(req.params.id);
-  if (!brand) throw createError("Brand not found", 404);
-  res.json({ brand: toPublicBrandApi(brand) });
+  res.json({ brands: result.rows });
 });
 
 /**
@@ -112,6 +148,34 @@ router.get("/:id", authenticate, async (req, res) => {
 });
 
 /**
+ * GET /brands/:id/analytics
+ * Returns aggregated analytics data for the brand's challenges.
+ */
+router.get("/:id/analytics", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const fromParam = req.query.from as string | undefined;
+  const toParam = req.query.to as string | undefined;
+
+  let from: Date | undefined;
+  let to: Date | undefined;
+
+  if (fromParam) {
+    from = new Date(fromParam);
+    if (isNaN(from.getTime())) throw createError("Invalid from date", 400);
+  }
+  if (toParam) {
+    to = new Date(toParam);
+    if (isNaN(to.getTime())) throw createError("Invalid to date", 400);
+  }
+
+  const analytics = await getBrandAnalytics(brand.id, from, to);
+  res.json({ analytics });
+});
+
+/**
  * DELETE /brands/:id
  * Soft-delete a brand kit (prevents new activity; existing challenges continue).
  */
@@ -124,6 +188,100 @@ router.delete("/:id", authenticate, async (req, res) => {
   if (!deleted) throw createError("Brand not found", 404);
 
   res.status(204).send();
+});
+
+/**
+ * GET /brands/:id/dashboard
+ * Get aggregated challenge stats for a brand's dashboard.
+ * Uses the brand_challenge_stats view for efficient single-query aggregation.
+ */
+router.get("/:id/dashboard", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const stats = await getBrandChallengeStats(brand.id);
+  res.json({ stats });
+});
+
+/**
+ * GET /brands/:id/questions/preview
+ * Returns questions (with correct answers) for the latest challenge of a brand.
+ * Accessible only to the brand owner for previewing before launch.
+ */
+router.get("/:id/questions/preview", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { challenges } = await getChallengesByBrandId(brand.id, 1);
+  if (challenges.length === 0) {
+    res.json({ questions: [], challenge: null });
+    return;
+  }
+
+  const challenge = challenges[0];
+  const questions = await getChallengeQuestions(challenge.id);
+  res.json({ questions, challenge });
+});
+
+/**
+ * POST /brands/:id/questions/:questionId/regenerate
+ * Delete a question and regenerate it for the same round.
+ * Returns the new question with correct_answer.
+ */
+router.post("/:id/questions/:questionId/regenerate", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { questionId } = req.params;
+  const allQuestions = await query<{ id: string; challenge_id: string; round: 1 | 2 | 3 }>(
+    "SELECT id, challenge_id, round FROM challenge_questions WHERE id = $1",
+    [questionId]
+  );
+  const existing = allQuestions.rows[0];
+  if (!existing) throw createError("Question not found", 404);
+
+  const challenge = await getBrandById(brand.id);
+  if (!challenge) throw createError("Brand not found", 404);
+
+  const distractorBrands = await getActiveDistractorBrands(brand.id);
+  const regenerated = generateChallengeQuestions(existing.challenge_id, brand, distractorBrands);
+  const newDraft = regenerated.find((q) => q.round === existing.round) ?? regenerated[0];
+
+  await deleteChallengeQuestion(questionId);
+  const inserted = await insertChallengeQuestion({ ...newDraft, challenge_id: existing.challenge_id });
+
+  res.json({ question: inserted });
+});
+
+/**
+ * POST /brands/:id/questions/:questionId/approve
+ * Mark a question as approved.
+ */
+router.post("/:id/questions/:questionId/approve", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { questionId } = req.params;
+  await query("UPDATE challenge_questions SET approved = true WHERE id = $1", [questionId]);
+  res.json({ success: true });
+});
+
+/**
+ * POST /brands/:id/questions/:questionId/flag
+ * Mark a question as flagged for regeneration.
+ */
+router.post("/:id/questions/:questionId/flag", authenticate, async (req, res) => {
+  const brand = await getBrandById(req.params.id);
+  if (!brand) throw createError("Brand not found", 404);
+  if (brand.owner_user_id !== req.user!.sub) throw createError("Forbidden", 403);
+
+  const { questionId } = req.params;
+  await query("UPDATE challenge_questions SET approved = false WHERE id = $1", [questionId]);
+  res.json({ success: true });
 });
 
 /**
@@ -162,11 +320,11 @@ router.post("/", authenticate, async (req, res) => {
 
   const brand = await createBrand({
     owner_user_id: userId,
-    name: body.name,
+    name: sanitizeSvgText(body.name),
     logo_url: logoUrl ?? null,
     primary_color: body.primaryColor ?? null,
     secondary_color: body.secondaryColor ?? null,
-    tagline: body.tagline ?? null,
+    tagline: body.tagline ? sanitizeSvgText(body.tagline) : null,
     brand_story: body.brandStory ?? null,
     usp: body.usp ?? null,
     product_image_keys: productImageKeys,

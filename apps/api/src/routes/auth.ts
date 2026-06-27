@@ -1,10 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
-import { findUserById, upsertUser } from "../db/queries/users";
+import { findUserById, upsertUser, updateLastLogin } from "../db/queries/users";
 import { createError } from "../middleware/error";
 import { authLimiter } from "../middleware/rate-limit";
 import { authenticate } from "../middleware/authenticate";
-import { verifyGoogleIdToken } from "../services/google-auth";
+import {
+  createGooglePkceAuthorizationUrl,
+  exchangeGoogleAuthorizationCode,
+  verifyGoogleIdToken,
+} from "../services/google-auth";
 import {
   consumePendingReferralAttribution,
   ensureUserReferralCode,
@@ -18,10 +22,22 @@ import {
   revokeAllUserRefreshTokens,
   isJtiRevoked,
 } from "../lib/tokens";
+import { query } from "../db";
 
 const router = Router();
 
-const GoogleCallbackSchema = z.object({ idToken: z.string().min(1) });
+const GoogleAuthorizeSchema = z.object({
+  callbackUrl: z.string().default("/"),
+});
+const GoogleCallbackSchema = z
+  .object({
+    idToken: z.string().min(1).optional(),
+    code: z.string().min(1).optional(),
+    state: z.string().min(1).optional(),
+  })
+  .refine((body) => body.idToken || (body.code && body.state), {
+    message: "idToken or code and state are required",
+  });
 const RefreshTokenSchema = z.object({ refreshToken: z.string().min(1) });
 
 function serializeUser(user: {
@@ -45,9 +61,17 @@ function serializeUser(user: {
 }
 
 /** POST /auth/google/callback */
+router.get("/google/authorize", authLimiter, async (req, res) => {
+  const { callbackUrl } = GoogleAuthorizeSchema.parse(req.query);
+  const authorization = await createGooglePkceAuthorizationUrl(callbackUrl);
+  res.json(authorization);
+});
+
 router.post("/google/callback", authLimiter, async (req, res) => {
-  const { idToken } = GoogleCallbackSchema.parse(req.body);
-  const profile = await verifyGoogleIdToken(idToken);
+  const { idToken, code, state } = GoogleCallbackSchema.parse(req.body);
+  const profile = idToken
+    ? await verifyGoogleIdToken(idToken)
+    : await exchangeGoogleAuthorizationCode({ code: code!, state: state! });
   const user = await upsertUser({
     email: profile.email,
     googleId: profile.googleId,
@@ -56,10 +80,30 @@ router.post("/google/callback", authLimiter, async (req, res) => {
   });
   await ensureUserReferralCode(user.id);
   await consumePendingReferralAttribution(user.id, req);
+
+  // Session fixation prevention: revoke all existing refresh tokens before
+  // issuing new credentials so any pre-login token is invalidated.
+  await revokeAllUserRefreshTokens(user.id);
+
   const accessToken = signAccessToken(user);
   const refreshToken = signRefreshToken(user);
   const payload = verifyRefreshToken(refreshToken);
   await registerRefreshJti(user.id, payload.jti);
+
+  // Update last_login and write an audit trail atomically with the new token.
+  await updateLastLogin(user.id);
+  await query(
+    `INSERT INTO audit_log (actor_id, action, entity, entity_key, after)
+     VALUES ($1, $2, $3, $4, $5::jsonb)`,
+    [
+      user.id,
+      "login",
+      "user",
+      user.id,
+      JSON.stringify({ method: "google_oauth", tokenRotated: true }),
+    ],
+  );
+
   res.json({ token: accessToken, refreshToken, user: serializeUser(user) });
 });
 

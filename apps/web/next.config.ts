@@ -30,7 +30,7 @@ function getAllowedOrigins() {
  *  - Prod/staging: S3 host via NEXT_PUBLIC_CDN_HOST or NEXT_PUBLIC_S3_HOST (e.g., assets.brandblitz.app)
  */
 function getImageRemotePatterns() {
-  const patterns = [
+  const patterns: NonNullable<NonNullable<NextConfig["images"]>["remotePatterns"]> = [
     // Google OAuth avatars
     { protocol: "https" as const, hostname: "lh3.googleusercontent.com" },
   ];
@@ -85,6 +85,20 @@ const nextConfig: NextConfig = {
     serverActions: {
       allowedOrigins: getAllowedOrigins(),
     },
+  },
+
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          {
+            key: "Referrer-Policy",
+            value: process.env.REFERRER_POLICY ?? "strict-origin-when-cross-origin",
+          },
+        ],
+      },
+    ];
   },
 };
 

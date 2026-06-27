@@ -11,22 +11,31 @@ describe("next image remote patterns", () => {
         },
         {
           "hostname": "localhost",
-          "pathname": "/brandblitz/**",
+          "pathname": "/**",
           "port": "9000",
           "protocol": "http",
         },
         {
           "hostname": "127.0.0.1",
-          "pathname": "/brandblitz/**",
+          "pathname": "/**",
           "port": "9000",
           "protocol": "http",
         },
-        {
-          "hostname": "assets.brandblitz.app",
-          "pathname": "/brandblitz/**",
-          "protocol": "https",
-        },
       ]
     `);
+  });
+
+  it("sets Referrer-Policy on all page responses", async () => {
+    await expect(nextConfig.headers?.()).resolves.toEqual([
+      {
+        source: "/:path*",
+        headers: [
+          {
+            key: "Referrer-Policy",
+            value: "strict-origin-when-cross-origin",
+          },
+        ],
+      },
+    ]);
   });
 });

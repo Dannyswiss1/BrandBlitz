@@ -13,6 +13,10 @@ import adminUsersRoutes from "./admin/users";
 import adminFraudRoutes from "./admin/fraud";
 import adminChallengesRoutes from "./admin/challenges";
 import adminEscrowRoutes from "./admin/escrow";
+import adminAuditLogRoutes from "./admin/audit-log";
+import adminPayoutsRoutes from "./admin/payouts";
+import adminStatsRoutes from "./admin/stats";
+import adminWaitlistRoutes from "./admin/waitlist";
 import adminRoutes from "./admin";
 import deleteAccountRoutes from "./me/delete-account";
 import docsRoutes from "./docs";
@@ -21,6 +25,7 @@ import legalRoutes from "./legal";
 import configRoutes from "./config";
 import adminCacheRoutes from "./admin/cache";
 import metricsRoutes from "./metrics";
+import waitlistRoutes from "./waitlist";
 
 export function registerRoutes(app: Express): void {
   // #143 — interactive OpenAPI 3.1 docs at /docs (Scalar UI) plus
@@ -46,9 +51,14 @@ export function registerRoutes(app: Express): void {
   app.use("/admin/challenges", adminChallengesRoutes);
   app.use("/admin/cache", adminCacheRoutes);
   app.use("/admin/escrow", adminEscrowRoutes);
+  app.use("/admin/audit-log", adminAuditLogRoutes);
+  app.use("/admin/payouts", adminPayoutsRoutes);
+  app.use("/admin/stats", adminStatsRoutes);
+  app.use("/admin/waitlist", adminWaitlistRoutes);
   // General admin endpoints (archive inspection, dead-letter queue triage).
   // Mounted after the more specific /admin/* routers; its own routes
   // (/admin/dlq, /admin/archive/...) do not overlap with them.
   app.use("/admin", adminRoutes);
   app.use("/me/delete-account", deleteAccountRoutes);
+  app.use("/waitlist", waitlistRoutes);
 }
