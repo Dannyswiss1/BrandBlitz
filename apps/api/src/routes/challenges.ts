@@ -17,11 +17,12 @@ import {
 } from "../db/queries/sessions";
 import { optionalAuth, authenticate } from "../middleware/authenticate";
 import { createError } from "../middleware/error";
+import { reportLimiter } from "../middleware/rate-limit";
 import { withCoalescing } from "../lib/cache";
 import { redis } from "../lib/redis";
 import { config } from "../lib/config";
 import { CursorQuerySchema } from "../db/pagination";
-import { query } from "../db/index";
+import { query, pool } from "../db/index";
 
 const router = Router();
 
@@ -197,9 +198,10 @@ router.get("/:id/deposit-info", authenticate, async (req, res) => {
 /**
  * POST /challenges/:id/report
  * Report inappropriate challenge content. Requires authentication.
- * Rate-limited: one report per user per challenge.
+ * Rate-limited per user; one report per user per challenge enforced via challenge_reports.
+ * Atomically increments reported_count within a transaction.
  */
-router.post("/:id/report", authenticate, async (req, res) => {
+router.post("/:id/report", authenticate, reportLimiter, async (req, res) => {
   const challenge = await getChallengeByIdAny(req.params.id);
   if (!challenge) throw createError("Challenge not found", 404);
 
@@ -216,20 +218,38 @@ router.post("/:id/report", authenticate, async (req, res) => {
   const body = ReportSchema.parse(req.body);
   const userId = req.user!.sub;
 
-  const existing = await query(
-    `SELECT id FROM challenge_reports WHERE challenge_id = $1 AND user_id = $2`,
-    [challenge.id, userId]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  if (existing.rows.length > 0) {
-    throw createError("You have already reported this challenge", 409, "ALREADY_REPORTED");
+    const existing = await client.query(
+      `SELECT id FROM challenge_reports WHERE challenge_id = $1 AND user_id = $2`,
+      [challenge.id, userId]
+    );
+
+    if (existing.rows.length > 0) {
+      await client.query("ROLLBACK");
+      throw createError("You have already reported this challenge", 409, "ALREADY_REPORTED");
+    }
+
+    await client.query(
+      `INSERT INTO challenge_reports (challenge_id, user_id, reason, note)
+       VALUES ($1, $2, $3, $4)`,
+      [challenge.id, userId, body.reason, body.note ?? null]
+    );
+
+    await client.query(
+      `UPDATE challenges SET reported_count = reported_count + 1 WHERE id = $1`,
+      [challenge.id]
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
-
-  await query(
-    `INSERT INTO challenge_reports (challenge_id, user_id, reason, note)
-     VALUES ($1, $2, $3, $4)`,
-    [challenge.id, userId, body.reason, body.note ?? null]
-  );
 
   res.status(201).json({ success: true });
 });

@@ -56,6 +56,10 @@ vi.mock("../middleware/require-active-user", () => ({
 vi.mock("../middleware/rate-limit", () => ({
   challengeStartLimiter: (req: any, res: any, next: any) => next(),
 }));
+vi.mock("../db/index", () => ({
+  query: vi.fn().mockResolvedValue({ rows: [] }),
+  pool: { connect: vi.fn() },
+}));
 vi.mock("../lib/integrity", () => ({
   computeSessionHmac: vi.fn().mockReturnValue("test-hmac"),
 }));
@@ -74,6 +78,7 @@ import * as sessionQueries from "../db/queries/sessions";
 import { redis } from "../lib/redis";
 import * as scoringService from "../services/scoring";
 import { updateStreak } from "../services/streaks";
+import { query } from "../db/index";
 
 const app = express();
 app.use(express.json());
@@ -251,6 +256,23 @@ describe("Sessions API", () => {
       expect(res.status).toBe(200);
       expect(sessionQueries.markChallengeStarted).toHaveBeenCalledWith("s1");
       expect(redis.set).toHaveBeenCalledWith("session-token:s1", "active-jwt", "EX", 600);
+    });
+
+    it("updates last_active_at for the user when starting a session", async () => {
+      (challengeQueries.getChallengeById as any).mockResolvedValue({ id: "c1" });
+      (redis.get as any).mockResolvedValue("s1");
+      (sessionQueries.getSession as any).mockResolvedValue({ id: "s1", user_id: "user123" });
+
+      const res = await request(app)
+        .post("/sessions/c1/start")
+        .set("Authorization", "Bearer active-jwt")
+        .send({ challengeToken: "valid-token" });
+
+      expect(res.status).toBe(200);
+      expect(query).toHaveBeenCalledWith(
+        "UPDATE users SET last_active_at = NOW() WHERE id = $1",
+        ["user123"]
+      );
     });
 
     it("should 401 if invalid token", async () => {

@@ -208,6 +208,7 @@ router.post(
     if (!session || session.id !== storedSessionId) throw createError("Session mismatch", 403);
 
     await markChallengeStarted(session.id);
+    await query("UPDATE users SET last_active_at = NOW() WHERE id = $1", [req.user!.sub]);
     await redis.del(`challenge-token:${challengeToken}`);
 
     // Store session start time for timing validation

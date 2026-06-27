@@ -259,3 +259,40 @@ export const webhookRotationLimiter = rateLimit({
     res.status(429).json({ error: "Too many webhook rotation requests" });
   },
 });
+
+/**
+ * Waitlist signup: 5 req / 15 min per IP.
+ * Public endpoint — keyed by IP to prevent bulk scraping.
+ */
+export const waitlistLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  passOnStoreError: true,
+  store: redisStore,
+  handler: (req, res) => {
+    record429("waitlistLimiter", normalizeClientIp(req.ip));
+    res.status(429).json({ error: "Too many signup attempts, please try again later" });
+  },
+});
+
+/**
+ * Challenge report: 5 req / 15 min per authenticated user.
+ * Prevents report-spam across multiple challenges.
+ */
+export const reportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.user?.sub ? `user:${req.user.sub}` : `ip:${normalizeClientIp(req.ip)}`),
+  passOnStoreError: true,
+  store: redisStore,
+  handler: (req, res) => {
+    const key = req.user?.sub ? `user:${req.user.sub}` : `ip:${normalizeClientIp(req.ip)}`;
+    record429("reportLimiter", key);
+    res.status(429).json({ error: "Too many report requests, please try again later" });
+  },
+});

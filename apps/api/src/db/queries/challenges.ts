@@ -29,6 +29,7 @@ export interface Challenge {
   max_players: number | null;
   starts_at: string;
   ends_at: string | null;
+  reported_count: number;
   deleted_at: string | null;
   created_at: string;
 }
