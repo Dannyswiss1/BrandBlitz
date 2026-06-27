@@ -3,7 +3,7 @@ import { z } from "zod";
 import { authenticate } from "../../middleware/authenticate";
 import { requireAdmin } from "../../middleware/require-admin";
 import { createError } from "../../middleware/error";
-import { getConfig, setConfig } from "../../db/queries/config";
+import { getConfig, getConfigRow, setConfig } from "../../db/queries/config";
 
 const router = Router();
 
@@ -65,12 +65,12 @@ router.patch("/:key", async (req, res) => {
 
 /**
  * GET /admin/config/:key
- * Retrieve a single config value.
+ * Retrieve a single config value with change-tracking metadata.
  */
 router.get("/:key", async (req, res) => {
-  const value = await getConfig(req.params.key);
-  if (value === null) throw createError("Config key not found", 404, "NOT_FOUND");
-  res.json({ key: req.params.key, value });
+  const row = await getConfigRow(req.params.key);
+  if (!row) throw createError("Config key not found", 404, "NOT_FOUND");
+  res.json({ key: row.key, value: row.value, updated_at: row.updated_at, updated_by: row.updated_by });
 });
 
 export default router;

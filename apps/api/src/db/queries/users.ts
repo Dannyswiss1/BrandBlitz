@@ -31,6 +31,7 @@ export interface User {
   last_play_day: string | null;
   streak_repairs_this_month: number;
   streak_repair_available: boolean;
+  last_active_at: string | null;
   deleted_at: string | null;
   created_at: string;
   updated_at: string;

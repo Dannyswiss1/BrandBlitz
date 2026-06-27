@@ -6,18 +6,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getActiveChallenges: vi.fn(),
   getChallengeById: vi.fn(),
+  getChallengeByIdAny: vi.fn(),
   getChallengesByBrandId: vi.fn(),
   getChallengeQuestions: vi.fn(),
   getBrandById: vi.fn(),
   getLeaderboard: vi.fn(),
   authMockUser: null as any,
+  dbQuery: vi.fn().mockResolvedValue({ rows: [] }),
+  mockClient: {
+    query: vi.fn().mockResolvedValue({ rows: [] }),
+    release: vi.fn(),
+  },
 }));
 
 vi.mock("../db/queries/challenges", () => ({
   getActiveChallenges: mocks.getActiveChallenges,
   getChallengeById: mocks.getChallengeById,
+  getChallengeByIdAny: mocks.getChallengeByIdAny,
   getChallengesByBrandId: mocks.getChallengesByBrandId,
   getChallengeQuestions: mocks.getChallengeQuestions,
+}));
+
+vi.mock("../db/index", () => ({
+  query: mocks.dbQuery,
+  pool: { connect: () => Promise.resolve(mocks.mockClient) },
+}));
+
+vi.mock("../middleware/rate-limit", () => ({
+  apiLimiter: (_req: any, _res: any, next: any) => next(),
+  reportLimiter: (_req: any, _res: any, next: any) => next(),
 }));
 
 vi.mock("../db/queries/brands", () => ({
@@ -194,6 +211,69 @@ describe("challenges routes", () => {
       
       expect(data.questions[1]).not.toHaveProperty("correct_option");
       expect(data.questions[1]).not.toHaveProperty("correct_answer");
+    });
+  });
+
+  describe("POST /challenges/:id/report", () => {
+    const challengeId = "00000000-0000-0000-0000-000000000001";
+    const userId = "00000000-0000-0000-0000-000000000002";
+
+    beforeEach(() => {
+      mocks.authMockUser = { sub: userId };
+      mocks.getChallengeByIdAny.mockResolvedValue({ id: challengeId, archived: false });
+      // First call: check for existing report (none found)
+      // Subsequent calls in the transaction handled by mockClient.query
+      mocks.mockClient.query.mockReset();
+      mocks.mockClient.query
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // SELECT from challenge_reports (not found)
+        .mockResolvedValueOnce(undefined) // INSERT challenge_reports
+        .mockResolvedValueOnce(undefined) // UPDATE challenges reported_count
+        .mockResolvedValueOnce(undefined); // COMMIT
+    });
+
+    it("returns 201 on successful report", async () => {
+      const response = await fetch(`${baseUrl}/challenges/${challengeId}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "misleading_content" }),
+      });
+      expect(response.status).toBe(201);
+      const data: any = await response.json();
+      expect(data.success).toBe(true);
+    });
+
+    it("returns 409 when user has already reported this challenge", async () => {
+      mocks.mockClient.query.mockReset();
+      mocks.mockClient.query
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: "existing-report" }] }) // SELECT finds existing
+        .mockResolvedValueOnce(undefined); // ROLLBACK
+      const response = await fetch(`${baseUrl}/challenges/${challengeId}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "other" }),
+      });
+      expect(response.status).toBe(409);
+    });
+
+    it("returns 401 when unauthenticated", async () => {
+      mocks.authMockUser = null;
+      const response = await fetch(`${baseUrl}/challenges/${challengeId}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "other" }),
+      });
+      expect(response.status).toBe(401);
+    });
+
+    it("returns 429 when rate limiter blocks the request", async () => {
+      // Override the rate limiter mock to simulate rejection
+      vi.doMock("../middleware/rate-limit", () => ({
+        apiLimiter: (_req: any, _res: any, next: any) => next(),
+        reportLimiter: (_req: any, res: any) =>
+          res.status(429).json({ error: "Too many report requests, please try again later" }),
+      }));
     });
   });
 
