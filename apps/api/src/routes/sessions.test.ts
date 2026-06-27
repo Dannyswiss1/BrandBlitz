@@ -47,6 +47,8 @@ vi.mock("../middleware/anti-cheat", () => ({
   },
   validateReactionTime: (req: any, res: any, next: any) => next(),
   validateDeviceFingerprint: (req: any, res: any, next: any) => next(),
+  requireSessionStartAllowed: (req: any, res: any, next: any) => next(),
+  assertValidTotalScore: vi.fn(),
 }));
 vi.mock("../middleware/require-active-user", () => ({
   requireActiveUser: (req: any, res: any, next: any) => next(),

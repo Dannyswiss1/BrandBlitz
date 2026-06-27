@@ -12,6 +12,11 @@ export const configSchema = z.object({
   DB_SLOW_QUERY_MS: z.coerce.number().int().positive().default(250),
   WARMUP_COMPLETE_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().default(2_000),
 
+  // Session-start brute-force lockout (issue #509). Tunable at runtime via the
+  // app_config key `session_start_lockout`; these are the fallback defaults.
+  SESSION_START_LOCKOUT_THRESHOLD: z.coerce.number().int().positive().default(10),
+  SESSION_START_LOCKOUT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3_600),
+
   // Auth
   JWT_SECRET: z.string().min(32),
   /** Set during rotation: the secret being phased out. Both old + new are accepted

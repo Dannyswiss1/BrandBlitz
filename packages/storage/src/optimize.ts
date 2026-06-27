@@ -13,10 +13,70 @@ const SPECS: Record<ImageType, { width: number; height: number; fit: "contain" |
 
 export class StorageError extends Error {
   public code: string;
-  constructor(message: string, public key: string, public bucket: string) {
+  constructor(
+    message: string,
+    public key: string,
+    public bucket: string,
+    code = "STORAGE_BODY_EMPTY",
+  ) {
     super(message);
     this.name = "StorageError";
-    this.code = "STORAGE_BODY_EMPTY";
+    this.code = code;
+  }
+}
+
+// Sharp's reported format for each declared MIME type. Used as a secondary,
+// decoder-level check that the bytes really are the image type they claim.
+const MIME_TO_SHARP_FORMATS: Record<string, string[]> = {
+  "image/jpeg": ["jpeg", "jpg"],
+  "image/png": ["png"],
+  "image/webp": ["webp"],
+  "image/gif": ["gif"],
+};
+
+/**
+ * Secondary defence for issue #505: confirm the Sharp library can actually
+ * decode the buffer and that its real format matches the declared MIME type.
+ *
+ * Magic-byte inspection at the API layer catches renamed files; this catches
+ * payloads that begin with a valid signature but are otherwise malformed or a
+ * different format than declared. Throws a StorageError on any mismatch.
+ */
+export async function assertImageMatchesDeclaredType(
+  buffer: Buffer,
+  declaredMime: string,
+  key = "",
+  bucket = "",
+): Promise<void> {
+  const expectedFormats = MIME_TO_SHARP_FORMATS[declaredMime];
+  if (!expectedFormats) {
+    throw new StorageError(
+      `Unsupported declared MIME type: ${declaredMime}`,
+      key,
+      bucket,
+      "STORAGE_MIME_UNSUPPORTED",
+    );
+  }
+
+  let format: string | undefined;
+  try {
+    ({ format } = await sharp(buffer).metadata());
+  } catch (error) {
+    throw new StorageError(
+      `Sharp could not parse the buffer as an image: ${(error as Error).message}`,
+      key,
+      bucket,
+      "STORAGE_IMAGE_UNDECODABLE",
+    );
+  }
+
+  if (!format || !expectedFormats.includes(format)) {
+    throw new StorageError(
+      `Image content (${format ?? "unknown"}) does not match declared type ${declaredMime}`,
+      key,
+      bucket,
+      "STORAGE_MIME_MISMATCH",
+    );
   }
 }
 
@@ -42,6 +102,15 @@ export async function optimizeImage(key: string, type: ImageType): Promise<strin
   }
 
   const buffer = Buffer.from(await original.Body.transformToByteArray());
+
+  // Secondary validation (issue #505): when the stored object declares a known
+  // image content type, confirm Sharp decodes it as exactly that type before we
+  // optimize and re-publish it. Objects without a recognized declared type fall
+  // through to the lenient format probe below.
+  const declaredMime = original.ContentType;
+  if (declaredMime && declaredMime in MIME_TO_SHARP_FORMATS) {
+    await assertImageMatchesDeclaredType(buffer, declaredMime, key, BUCKETS.BRAND_ASSETS);
+  }
 
   // Check if format is supported and if image is valid
   try {

@@ -248,6 +248,7 @@ CREATE TABLE fraud_flags (
 
 CREATE INDEX idx_fraud_flags_user_id    ON fraud_flags (user_id);
 CREATE INDEX idx_fraud_flags_session_id ON fraud_flags (session_id);
+CREATE INDEX idx_fraud_flags_created_at ON fraud_flags (created_at DESC);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- LEAGUE ASSIGNMENTS (recalculated weekly)

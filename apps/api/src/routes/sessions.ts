@@ -18,6 +18,7 @@ import {
   validateReactionTime,
   validateDeviceFingerprint,
   assertValidTotalScore,
+  requireSessionStartAllowed,
 } from "../middleware/anti-cheat";
 import { createError } from "../middleware/error";
 import { challengeStartLimiter } from "../middleware/rate-limit";
@@ -192,6 +193,7 @@ router.post(
   authenticate,
   requireActiveUser,
   challengeStartLimiter,
+  requireSessionStartAllowed,
   async (req, res) => {
     const { challengeToken } = z.object({ challengeToken: z.string() }).parse(req.body);
     const challengeId = String(req.params.challengeId);
