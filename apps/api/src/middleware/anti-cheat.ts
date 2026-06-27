@@ -71,6 +71,7 @@ async function recordFraudFlag(
   if (!sessionId) return;
 
   await createFraudFlag({ sessionId, userId, flagType, details });
+  // Fraud review queries rely on idx_game_sessions_flagged for flagged-session scans.
 
   const severity = (details?.severity as string) || "warning";
   metrics.inc("antiCheat.flags_total", { severity, type: flagType });
